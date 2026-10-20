@@ -195,6 +195,7 @@ async function handleHideFile(file) {
     $("hide-drop").hidden = true;
     $("hide-preview-wrap").hidden = false;
     $("hide-result").hidden = true;
+    $("btn-download").hidden = true;
     updateHideUi();
   } catch (err) {
     showToast(err.message, "error", 6000);
@@ -207,6 +208,7 @@ function resetHideImage() {
   $("hide-drop").hidden = false;
   $("hide-preview-wrap").hidden = true;
   $("hide-result").hidden = true;
+  $("btn-download").hidden = true;
   updateHideUi();
 }
 
@@ -241,8 +243,9 @@ async function doEncrypt() {
 
     $("stego-preview").src = hideState.stegoUrl;
     $("hide-result").hidden = false;
+    $("hide-preview-wrap").hidden = true;
+    link.hidden = false;
     status.hidden = true;
-    $("hide-result").scrollIntoView({ behavior: "smooth", block: "nearest" });
     showToast("Pesan berhasil disembunyikan. Unduh gambar PNG-nya.", "ok");
   } catch (err) {
     status.textContent = err.message;
@@ -650,6 +653,7 @@ function init() {
 
   setupUploadZone($("hide-drop"), $("hide-file"), handleHideFile);
   $("hide-replace").addEventListener("click", resetHideImage);
+  $("hide-replace-result").addEventListener("click", resetHideImage);
   $("secret-text").addEventListener("input", updateHideUi);
   $("hide-password").addEventListener("input", updateHideUi);
   $("hide-hint").addEventListener("input", updateHideUi);

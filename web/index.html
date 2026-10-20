@@ -54,69 +54,78 @@
 
     <!-- ===================== VIEW: SEMBUNYIKAN ===================== -->
     <section class="view active" id="view-hide" role="tabpanel" aria-labelledby="tab-hide">
-      <div class="card">
-        <h1 class="card-title">Sembunyikan Pesan ke Gambar</h1>
+      <div class="card hide-card">
+        <h1 class="card-title hide-title">Sembunyikan Pesan-Mu</h1>
         <p class="card-sub">Pesan dienkripsi <strong>AES-256</strong> lalu disisipkan ke piksel gambar. Semua proses berjalan di perangkat Anda — tidak ada data yang dikirim ke server.</p>
 
-        <div class="upload-zone" id="hide-drop" tabindex="0" role="button" aria-label="Pilih gambar PNG">
-          <svg viewBox="0 0 24 24" width="36" height="36" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="8.5" cy="10" r="1.6" fill="currentColor"/><path d="M4 16l4.5-4.5 3 3L15 11l5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          <p class="upload-label">Seret gambar ke sini atau <span class="upload-link">pilih file</span></p>
-          <p class="upload-note">Wajib <strong>PNG</strong> — format lossless, piksel tidak rusak oleh kompresi.</p>
-          <input type="file" id="hide-file" accept="image/png,.png" hidden>
-        </div>
+        <div class="hide-layout">
+          <div class="hide-column hide-image-column">
+            <div class="upload-zone" id="hide-drop" tabindex="0" role="button" aria-label="Pilih gambar PNG">
+              <svg viewBox="0 0 24 24" width="36" height="36" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="8.5" cy="10" r="1.6" fill="currentColor"/><path d="M4 16l4.5-4.5 3 3L15 11l5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <p class="upload-label">Seret gambar ke sini atau <span class="upload-link">pilih file</span></p>
+              <p class="upload-note">Wajib <strong>PNG</strong> — format lossless, piksel tidak rusak oleh kompresi.</p>
+              <input type="file" id="hide-file" accept="image/png,.png" hidden>
+            </div>
 
-        <div class="preview-wrap" id="hide-preview-wrap" hidden>
-          <img id="hide-preview-img" alt="Pratinjau gambar">
-          <div class="preview-meta">
-            <span id="hide-file-name"></span>
-            <span id="hide-file-dims"></span>
-            <span class="capacity-badge" id="hide-capacity"></span>
+            <div class="preview-wrap" id="hide-preview-wrap" hidden>
+              <img id="hide-preview-img" alt="Pratinjau gambar">
+              <div class="preview-meta">
+                <span id="hide-file-name"></span>
+                <span id="hide-file-dims"></span>
+                <span class="capacity-badge" id="hide-capacity"></span>
+              </div>
+              <button class="btn btn-ghost btn-sm" id="hide-replace" type="button">Ganti gambar</button>
+            </div>
+
+            <div class="card result-card hide-result" id="hide-result" hidden>
+              <h2 class="result-title">
+                <svg viewBox="0 0 24 24" width="22" height="22" class="ok-icon" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12.5l2.5 2.5L16 9.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                Berhasil — pesan telah tersembunyi
+              </h2>
+              <img id="stego-preview" alt="Gambar hasil steganografi">
+              <div class="callout callout-warn">
+                <strong>Penting:</strong> kirim file ini sebagai <strong>DOKUMEN/FILE</strong> di WhatsApp/Telegram (bukan sebagai foto). Kompresi foto akan merusak pesan tersembunyi.
+              </div>
+              <button class="btn btn-ghost btn-sm" id="hide-replace-result" type="button">Ganti gambar</button>
+            </div>
           </div>
-          <button class="btn btn-ghost btn-sm" id="hide-replace" type="button">Ganti gambar</button>
-        </div>
 
-        <label class="field">
-          <span class="field-label">Pesan Rahasia</span>
-          <textarea id="secret-text" rows="5" placeholder="Tulis pesan yang ingin disembunyikan…" spellcheck="false"></textarea>
-          <span class="field-foot"><span id="secret-counter">0 B</span><span id="secret-cap-info"></span></span>
-        </label>
+          <div class="hide-column hide-message-column">
+            <label class="field secret-field">
+              <span class="field-label">Pesan Rahasia</span>
+              <textarea id="secret-text" rows="5" placeholder="Tulis pesan yang ingin disembunyikan…" spellcheck="false"></textarea>
+              <span class="field-foot"><span id="secret-counter">0 B</span><span id="secret-cap-info"></span></span>
+            </label>
+            <a class="btn btn-primary btn-block hide-download" id="btn-download" download href="#" hidden>
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 4v11m0 0l-4-4m4 4l4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 19h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              Unduh Gambar (PNG)
+            </a>
+          </div>
 
-        <label class="field">
-          <span class="field-label">Kata Sandi</span>
-          <span class="input-wrap">
-            <input type="password" id="hide-password" placeholder="Kata sandi (tidak peka huruf besar/kecil)" autocomplete="new-password">
-            <button class="pw-toggle" type="button" data-target="hide-password" aria-label="Tampilkan sandi">
-              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+          <div class="hide-column hide-security-column">
+            <label class="field">
+              <span class="field-label">Kata Sandi</span>
+              <span class="input-wrap">
+                <input type="password" id="hide-password" placeholder="Kata sandi (tidak peka huruf besar/kecil)" autocomplete="new-password">
+                <button class="pw-toggle" type="button" data-target="hide-password" aria-label="Tampilkan sandi">
+                  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+                </button>
+              </span>
+              <span class="field-hint">Huruf besar/kecil diabaikan — "Rahasia123" = "rahasia123".</span>
+            </label>
+
+            <label class="field">
+              <span class="field-label">Petunjuk <span class="optional-tag">opsional</span></span>
+              <input type="text" id="hide-hint" placeholder="Contoh: nama tempat kita bertemu 2 tahun lalu" maxlength="200">
+              <span class="field-hint">Tampil ke penerima sebelum sandi dimasukkan. Jangan tulis sandinya di sini.</span>
+            </label>
+
+            <button class="btn btn-primary btn-block" id="btn-encrypt" type="button" disabled>
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+              Enkripsi &amp; Sembunyikan
             </button>
-          </span>
-          <span class="field-hint">Huruf besar/kecil diabaikan — "Rahasia123" = "rahasia123".</span>
-        </label>
-
-        <label class="field">
-          <span class="field-label">Petunjuk <span class="optional-tag">opsional</span></span>
-          <input type="text" id="hide-hint" placeholder="Contoh: nama tempat kita bertemu 2 tahun lalu" maxlength="200">
-          <span class="field-hint">Tampil ke penerima sebelum sandi dimasukkan. Jangan tulis sandinya di sini.</span>
-        </label>
-
-        <button class="btn btn-primary btn-block" id="btn-encrypt" type="button" disabled>
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2"/></svg>
-          Enkripsi &amp; Sembunyikan
-        </button>
-        <p class="status-line" id="hide-status" hidden></p>
-      </div>
-
-      <div class="card result-card" id="hide-result" hidden>
-        <h2 class="result-title">
-          <svg viewBox="0 0 24 24" width="22" height="22" class="ok-icon" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12.5l2.5 2.5L16 9.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Berhasil — pesan telah tersembunyi
-        </h2>
-        <img id="stego-preview" alt="Gambar hasil steganografi">
-        <a class="btn btn-primary btn-block" id="btn-download" download href="#">
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 4v11m0 0l-4-4m4 4l4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 19h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-          Unduh Gambar (PNG)
-        </a>
-        <div class="callout callout-warn">
-          <strong>Penting:</strong> kirim file ini sebagai <strong>DOKUMEN/FILE</strong> di WhatsApp/Telegram (bukan sebagai foto). Kompresi foto akan merusak pesan tersembunyi.
+            <p class="status-line" id="hide-status" hidden></p>
+          </div>
         </div>
       </div>
     </section>
