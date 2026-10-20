@@ -84,7 +84,8 @@ export function getUsage() {
     return { usedBytes: 0, maxBytes: MAX_BYTES, percent: 0, level: "unavailable" };
   }
   let used = 0;
-  used += encoder.encode(localStorage.getItem(INDEX_KEY) || "[]").length;
+  const rawIndex = localStorage.getItem(INDEX_KEY);
+  if (rawIndex) used += encoder.encode(rawIndex).length;
   for (const id of readIndex()) {
     const raw = localStorage.getItem(memoKey(id));
     if (raw) used += encoder.encode(raw).length;
