@@ -85,10 +85,13 @@ export function getUsage() {
   }
   let used = 0;
   const rawIndex = localStorage.getItem(INDEX_KEY);
-  if (rawIndex) used += encoder.encode(rawIndex).length;
-  for (const id of readIndex()) {
-    const raw = localStorage.getItem(memoKey(id));
-    if (raw) used += encoder.encode(raw).length;
+  const indexIds = readIndex();
+  if (rawIndex && indexIds.length > 0) {
+    used += encoder.encode(rawIndex).length;
+    for (const id of indexIds) {
+      const raw = localStorage.getItem(memoKey(id));
+      if (raw) used += encoder.encode(raw).length;
+    }
   }
   const percent = (used / MAX_BYTES) * 100;
   let level = "ok";
