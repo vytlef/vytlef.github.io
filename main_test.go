@@ -31,6 +31,12 @@ func TestHealthz(t *testing.T) {
 	if got := resp.Header.Get("Content-Security-Policy"); !strings.Contains(got, "default-src 'self'") {
 		t.Errorf("CSP = %q", got)
 	}
+	if got := resp.Header.Get("Content-Security-Policy"); !strings.Contains(got, "script-src 'self' 'wasm-unsafe-eval'") {
+		t.Errorf("CSP does not allow WebAssembly compilation: %q", got)
+	}
+	if got := resp.Header.Get("Content-Security-Policy"); strings.Contains(got, "'unsafe-eval'") {
+		t.Errorf("CSP must not allow JavaScript eval: %q", got)
+	}
 }
 
 func TestVersion(t *testing.T) {

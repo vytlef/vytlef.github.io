@@ -388,6 +388,7 @@ async function autoSaveMemo(message) {
 
   if (result.ok) {
     updateMemoBadge();
+    if ($("view-memo").classList.contains("active")) refreshMemoView();
     const pct = Math.round(result.usage.percent);
     if (pct >= 95) {
       showToast(`Tersimpan ke Memo — penyimpanan kritis (${pct}%). Segera hapus memo lama.`, "warn", 5500);

@@ -13,7 +13,8 @@ self.onmessage = async (event) => {
       outputType: "binary",
     });
     self.postMessage({ root: root.buffer }, [root.buffer]);
-  } catch {
-    self.postMessage({ error: "Argon2id gagal menghitung kunci. Periksa memori perangkat lalu coba lagi." });
+  } catch (error) {
+    const detail = error && typeof error.message === "string" ? error.message : String(error);
+    self.postMessage({ error: `Argon2id gagal menghitung kunci: ${detail}` });
   }
 };

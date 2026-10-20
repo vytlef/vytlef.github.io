@@ -31,7 +31,7 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
 		h.Set("Content-Security-Policy",
 			"default-src 'self'; "+
-				"script-src 'self'; "+
+				"script-src 'self' 'wasm-unsafe-eval'; "+
 				"style-src 'self'; "+
 				"img-src 'self' blob: data:; "+
 				"connect-src 'self'; "+
