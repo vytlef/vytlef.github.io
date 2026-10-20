@@ -1,17 +1,17 @@
-const VERSION = "cryptopic-v2";
+const VERSION = "cryptopic-v3";
 const SHELL = [
-  "/",
-  "/index.html",
-  "/styles.css",
-  "/js/theme-init.js",
-  "/js/app.js",
-  "/js/crypto.js",
-  "/js/stego.js",
-  "/js/memo.js",
-  "/manifest.json",
-  "/icons/icon-192.png",
-  "/icons/icon-512.png",
-  "/icons/icon-maskable.png",
+  "./",
+  "./index.html",
+  "./styles.css",
+  "./js/theme-init.js",
+  "./js/app.js",
+  "./js/crypto.js",
+  "./js/stego.js",
+  "./js/memo.js",
+  "./manifest.json",
+  "./icons/icon-192.png",
+  "./icons/icon-512.png",
+  "./icons/icon-maskable.png",
 ];
 
 self.addEventListener("install", (event) => {
@@ -35,7 +35,8 @@ self.addEventListener("activate", (event) => {
 });
 
 async function offlineIndex() {
-  const cached = (await caches.match("/index.html")) || (await caches.match("/"));
+  const cached =
+    (await caches.match("./index.html")) || (await caches.match("./"));
   if (!cached) {
     return new Response("CryptoPic sedang offline dan belum tersimpan di cache.", {
       status: 503,
@@ -62,7 +63,7 @@ self.addEventListener("fetch", (event) => {
       fetch(request)
         .then((response) => {
           const copy = response.clone();
-          caches.open(VERSION).then((cache) => cache.put("/index.html", copy));
+          caches.open(VERSION).then((cache) => cache.put("./index.html", copy));
           return response;
         })
         .catch(() => offlineIndex())
