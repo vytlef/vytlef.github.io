@@ -1,10 +1,10 @@
-const VERSION = "cryptopic-v4";
+const VERSION = "cryptopic-__BUILD_VERSION__";
 const SHELL = [
   "./",
   "./index.html",
-  "./styles.css",
-  "./js/theme-init.js",
-  "./js/app.js",
+  "./styles.css?v=__BUILD_VERSION__",
+  "./js/theme-init.js?v=__BUILD_VERSION__",
+  "./js/app.js?v=__BUILD_VERSION__",
   "./js/crypto.js",
   "./js/stego.js",
   "./js/memo.js",

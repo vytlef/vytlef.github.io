@@ -22,6 +22,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Stamp build version
+        run: |
+          SV="${{ github.sha }}"
+          sed -i "s/__BUILD_VERSION__/${SV}/g" web/sw.js web/index.html
+
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -6,11 +6,12 @@
   <meta name="description" content="CryptoPic — sembunyikan pesan terenkripsi AES-256 ke dalam gambar PNG. 100% di perangkat Anda.">
   <meta name="theme-color" id="theme-color-meta" content="#f4f6fb">
   <title>CryptoPic — Sembunyikan Pesan dalam Gambar</title>
+  <meta name="cryptopic-build" content="__BUILD_VERSION__">
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="icons/icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="styles.css">
-  <script src="js/theme-init.js"></script> 
+  <link rel="stylesheet" href="styles.css?v=__BUILD_VERSION__">
+  <script src="js/theme-init.js?v=__BUILD_VERSION__"></script> 
 </head>
 <body>
   <header class="app-header">
@@ -227,6 +228,6 @@
 
   <div class="toast-container" id="toast-container" aria-live="polite"></div>
 
-  <script type="module" src="js/app.js"></script>
+  <script type="module" src="js/app.js?v=__BUILD_VERSION__"></script>
 </body>
 </html>

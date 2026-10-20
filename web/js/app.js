@@ -697,10 +697,56 @@ function init() {
   updateHideUi();
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./sw.js").catch(() => {
+    navigator.serviceWorker.register("./sw.js?v=" + Date.now(), { updateViaCache: "none" }).catch(() => {
       /* SW belum tersedia / HTTP non-localhost — abaikan */
     });
+
+    watchBuildVersion();
   }
+}
+
+function watchBuildVersion() {
+  const meta = document.querySelector('meta[name="cryptopic-build"]');
+  const current = meta ? meta.content : "";
+  if (!current || current.includes("__BUILD_VERSION__")) return;
+
+  let reloading = false;
+  let lastSeen = current;
+
+  const reloadOnce = () => {
+    if (reloading) return;
+    reloading = true;
+    window.location.reload();
+  };
+
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!navigator.serviceWorker.controller) return;
+    if (lastSeen !== current) reloadOnce();
+  });
+
+  const check = async () => {
+    if (reloading) return;
+    try {
+      const res = await fetch("index.html?t=" + Date.now(), { cache: "no-store" });
+      const html = await res.text();
+      const match = html.match(/name="cryptopic-build" content="([^"]+)"/);
+      if (
+        match &&
+        !match[1].includes("__BUILD_VERSION__") &&
+        match[1] !== lastSeen
+      ) {
+        lastSeen = match[1];
+        reloadOnce();
+      }
+    } catch {
+      /* offline — abaikan */
+    }
+  };
+
+  setInterval(check, 20000);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") check();
+  });
 }
 
 init();
