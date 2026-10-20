@@ -268,6 +268,7 @@ function resetOpen() {
   openState.fileName = "";
   $("open-drop").hidden = false;
   $("open-preview-wrap").hidden = true;
+  $("open-start-note").hidden = false;
   $("open-hint-box").hidden = true;
   $("open-password-field").hidden = true;
   $("open-password").value = "";
@@ -275,6 +276,7 @@ function resetOpen() {
   $("open-error").hidden = true;
   $("open-status").hidden = true;
   $("open-result").hidden = true;
+  $("open-result-placeholder").hidden = false;
 }
 
 async function handleOpenFile(file) {
@@ -283,6 +285,7 @@ async function handleOpenFile(file) {
     showToast(pngRejectMessage(file), "error", 6000);
     return;
   }
+  $("open-start-note").hidden = true;
   const status = $("open-status");
   status.hidden = false;
   status.classList.remove("error");
@@ -347,6 +350,7 @@ async function doDecrypt() {
     });
     $("open-result-meta").textContent = `${openState.fileName} · ${when}`;
     $("open-result").hidden = false;
+    $("open-result-placeholder").hidden = true;
     status.hidden = true;
 
     autoSaveMemo(message);
