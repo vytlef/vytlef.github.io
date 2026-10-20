@@ -23,6 +23,7 @@ import {
   getUsage,
   storageAvailable,
   requestPersistentStorage,
+  initStorage,
   formatBytes,
   MAX_BYTES,
 } from "./memo.js";
@@ -365,8 +366,8 @@ async function doDecrypt() {
   }
 }
 
-function autoSaveMemo(message) {
-  const result = saveMemo({
+async function autoSaveMemo(message) {
+  const result = await saveMemo({
     text: message,
     hint: openState.parsed ? openState.parsed.hint : "",
     fileName: openState.fileName,
@@ -527,10 +528,10 @@ function renderMemoList() {
     del.innerHTML = TRASH_SVG;
     del.setAttribute("aria-label", "Hapus memo ini");
     del.hidden = selectMode;
-    del.addEventListener("click", (e) => {
+    del.addEventListener("click", async (e) => {
       e.stopPropagation();
       if (confirm("Hapus memo ini? Tindakan ini tidak bisa dibatalkan.")) {
-        deleteMemos([memo.id]);
+        await deleteMemos([memo.id]);
         refreshMemoView();
         showToast("Memo dihapus.", "ok", 2500);
       }
@@ -682,18 +683,17 @@ function init() {
     }
     updateDeleteSelectedButton();
   });
-  $("btn-delete-selected").addEventListener("click", () => {
+  $("btn-delete-selected").addEventListener("click", async () => {
     const ids = [...document.querySelectorAll(".memo-check:checked")].map((c) => c.closest(".memo-item").dataset.id);
     if (ids.length === 0) return;
     if (confirm(`Hapus ${ids.length} memo terpilih? Tindakan ini tidak bisa dibatalkan.`)) {
-      deleteMemos(ids);
+      await deleteMemos(ids);
       setSelectMode(false);
       refreshMemoView();
       showToast(`${ids.length} memo dihapus.`, "ok", 2500);
     }
   });
 
-  updateMemoBadge();
   updateHideUi();
 
   if ("serviceWorker" in navigator) {
@@ -703,6 +703,11 @@ function init() {
 
     watchBuildVersion();
   }
+
+  initStorage().then(() => {
+    updateMemoBadge();
+    if (document.getElementById("view-memo").classList.contains("active")) refreshMemoView();
+  });
 }
 
 function watchBuildVersion() {
