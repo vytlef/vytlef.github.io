@@ -115,17 +115,20 @@ func TestStaticAssets(t *testing.T) {
 	defer srv.Close()
 
 	cases := map[string]string{
-		"/styles.css":              "text/css",
-		"/js/app.js":               "text/javascript",
-		"/js/crypto.js":            "text/javascript",
-		"/js/stego.js":             "text/javascript",
-		"/js/memo.js":              "text/javascript",
-		"/js/theme-init.js":        "text/javascript",
-		"/manifest.json":           "application/json",
-		"/sw.js":                   "text/javascript",
-		"/icons/icon-192.png":      "image/png",
-		"/icons/icon-512.png":      "image/png",
-		"/icons/icon-maskable.png": "image/png",
+		"/styles.css":          "text/css",
+		"/js/app.js":           "text/javascript",
+		"/js/crypto.js":        "text/javascript",
+		"/js/stego.js":         "text/javascript",
+		"/js/argon2-worker.js": "text/javascript",
+		"/js/vendor/hash-wasm-argon2-4.12.0.min.js": "text/javascript",
+		"/js/vendor/hash-wasm-LICENSE.txt":          "text/plain",
+		"/js/memo.js":                               "text/javascript",
+		"/js/theme-init.js":                         "text/javascript",
+		"/manifest.json":                            "application/json",
+		"/sw.js":                                    "text/javascript",
+		"/icons/icon-192.png":                       "image/png",
+		"/icons/icon-512.png":                       "image/png",
+		"/icons/icon-maskable.png":                  "image/png",
 	}
 	for path, wantCT := range cases {
 		resp, err := http.Get(srv.URL + path)

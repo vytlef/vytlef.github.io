@@ -2,7 +2,7 @@ import {
   encryptPayload,
   parsePayload,
   decryptPayload,
-  overheadBytes,
+  deriveV2Keys,
   CryptoPicError,
 } from "./crypto.js";
 import {
@@ -10,9 +10,10 @@ import {
   pngRejectMessage,
   loadImageFromFile,
   imageToImageData,
-  capacityBytes,
+  maxMessageBytes,
   embedPayload,
   extractPayload,
+  extractProtectedBody,
   imageDataToPngBlob,
   StegoError,
 } from "./stego.js";
@@ -152,15 +153,18 @@ const hideState = { img: null, width: 0, height: 0, fileName: "", stegoUrl: null
 
 function hideAvailable() {
   if (!hideState.img) return 0;
-  const total = capacityBytes(hideState.width, hideState.height);
   const hint = $("hide-hint").value.trim();
-  return Math.max(0, total - overheadBytes(hint));
+  return maxMessageBytes(hideState.width, hideState.height, hint);
 }
 
 function updateHideUi() {
   const secret = $("secret-text").value;
   const bytes = encoder.encode(secret).length;
   const avail = hideAvailable();
+
+  if (hideState.img) {
+    $("hide-capacity").textContent = `Kapasitas pesan maks. ${formatBytes(avail)}`;
+  }
 
   $("secret-counter").textContent = `${formatBytes(bytes)}`;
   const counter = $("secret-counter");
@@ -191,7 +195,7 @@ async function handleHideFile(file) {
     $("hide-preview-img").src = URL.createObjectURL(file);
     $("hide-file-name").textContent = file.name;
     $("hide-file-dims").textContent = `${img.naturalWidth}×${img.naturalHeight}px`;
-    $("hide-capacity").textContent = `Kapasitas ${formatBytes(capacityBytes(img.naturalWidth, img.naturalHeight))}`;
+    $("hide-capacity").textContent = `Kapasitas pesan maks. ${formatBytes(maxMessageBytes(img.naturalWidth, img.naturalHeight, $("hide-hint").value.trim()))}`;
     $("hide-drop").hidden = true;
     $("hide-preview-wrap").hidden = false;
     $("hide-result").hidden = true;
@@ -222,14 +226,14 @@ async function doEncrypt() {
   const status = $("hide-status");
   status.hidden = false;
   status.classList.remove("error");
-  status.innerHTML = '<span class="spinner"></span> Mengenkripsi & menyisipkan pesan…';
+  status.innerHTML = '<span class="spinner"></span> Mengolah Argon2id dan menyisipkan pesan…';
   $("btn-encrypt").disabled = true;
 
   try {
     const img = hideState.img;
     const { imageData } = imageToImageData(img);
-    const payload = await encryptPayload(password, secret, hint);
-    const embedded = embedPayload(imageData, payload);
+    const { payload, stegoKey } = await encryptPayload(password, secret, hint);
+    const embedded = await embedPayload(imageData, payload, stegoKey);
     const blob = await imageDataToPngBlob(embedded);
 
     if (hideState.stegoUrl) URL.revokeObjectURL(hideState.stegoUrl);
@@ -311,6 +315,9 @@ async function handleOpenFile(file) {
       $("open-hint-text").textContent = parsed.hint;
       $("open-hint-box").hidden = false;
     }
+    $("open-password-hint").textContent = parsed.version === 1
+      ? "Gambar V1: huruf besar/kecil tidak dibedakan."
+      : "Gambar V2: huruf besar/kecil dibedakan; bentuk Unicode dinormalisasi.";
     $("open-password-field").hidden = false;
     status.hidden = true;
     $("open-password").focus();
@@ -333,12 +340,19 @@ async function doDecrypt() {
   const status = $("open-status");
   status.hidden = false;
   status.classList.remove("error");
-  status.innerHTML = '<span class="spinner"></span> Mendekripsi…';
+  status.innerHTML = '<span class="spinner"></span> Memeriksa sandi dan membuka pesan…';
   $("btn-decrypt").disabled = true;
   $("open-error").hidden = true;
 
   try {
-    const message = await decryptPayload(password, openState.parsed);
+    let message;
+    if (openState.parsed.version === 1) {
+      message = await decryptPayload(password, openState.parsed);
+    } else {
+      const keys = await deriveV2Keys(password, openState.parsed.salt, openState.parsed.kdf);
+      const ciphertext = await extractProtectedBody(openState.imageData, openState.parsed, keys.stegoKey);
+      message = await decryptPayload(password, openState.parsed, ciphertext, keys);
+    }
 
     $("open-message").textContent = message;
     const when = new Date().toLocaleString("id-ID", {
