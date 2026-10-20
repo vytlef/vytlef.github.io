@@ -348,7 +348,6 @@ async function doDecrypt() {
     $("open-result-meta").textContent = `${openState.fileName} · ${when}`;
     $("open-result").hidden = false;
     status.hidden = true;
-    $("open-result").scrollIntoView({ behavior: "smooth", block: "nearest" });
 
     autoSaveMemo(message);
   } catch (err) {

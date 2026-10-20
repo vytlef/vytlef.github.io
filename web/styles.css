@@ -809,4 +809,54 @@ html.theme-animating::view-transition-new(root) {
 
   .hide-result { margin-top: 0; padding: 14px; }
   .hide-result > img { max-height: 190px; }
+
+  #view-open { max-width: none; }
+  .open-card { padding: 20px 24px 24px; }
+  .open-title { text-align: center; font-size: 1.45rem; }
+  .open-card > .card-sub { max-width: 780px; margin: 4px auto 20px; text-align: center; }
+  .open-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) minmax(0, 1fr);
+    grid-template-areas: "image result security";
+    align-items: start;
+    gap: 22px;
+  }
+  .open-image-column { grid-area: image; min-width: 0; }
+  .open-result-column { grid-area: result; min-width: 0; }
+  .open-security-column { grid-area: security; min-width: 0; }
+  .open-image-column > .upload-zone { min-height: 245px; display: flex; flex-direction: column; justify-content: center; }
+  .open-image-column .preview-wrap { margin-top: 0; }
+  .open-image-column .preview-wrap img { max-height: 220px; }
+  .open-image-column .preview-meta { padding: 8px 10px 0; font-size: .76rem; }
+  .open-image-column .preview-wrap .btn-sm { margin: 8px 10px 10px; }
+  .open-security-column .callout { margin-top: 0; }
+  .open-security-column .field { margin-top: 14px; }
+  .open-security-column .btn-block { margin-top: 18px; }
+  .open-security-column .callout-danger { margin-top: 12px; }
+  .open-result { margin: 0; padding: 16px; }
+  .open-result .result-title { font-size: .98rem; margin-bottom: 10px; }
+  .open-result .message-box { max-height: clamp(150px, 26vh, 280px); }
+
+  .app-main:has(#view-memo.active) { padding-bottom: 12px; }
+  .view.active#view-memo {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 12px;
+    max-width: none;
+    height: calc(100dvh - var(--header-h) - 79px);
+    min-height: 400px;
+  }
+  .memo-title { text-align: center; margin: 0; font-size: 1.45rem; }
+  .memo-layout {
+    display: grid;
+    grid-template-columns: minmax(220px, .75fr) minmax(0, 2fr);
+    gap: 18px;
+    min-height: 0;
+  }
+  .memo-layout > .card { margin: 0; min-height: 0; }
+  .storage-card { align-self: start; }
+  .list-card { display: flex; flex-direction: column; }
+  .list-card .list-toolbar { flex: 0 0 auto; }
+  .memo-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 4px; }
+  .empty-state { display: flex; flex-direction: column; justify-content: center; flex: 1 1 auto; }
 }
