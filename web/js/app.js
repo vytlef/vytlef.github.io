@@ -68,9 +68,39 @@ function initTheme() {
   applyTheme(saved === "dark" || saved === "light" ? saved : prefersDark ? "dark" : "light");
 }
 
-function toggleTheme() {
+function toggleTheme(event) {
   const current = document.documentElement.dataset.theme;
-  applyTheme(current === "dark" ? "light" : "dark");
+  const next = current === "dark" ? "light" : "dark";
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const root = document.documentElement;
+
+  if (!document.startViewTransition || reduce) {
+    applyTheme(next);
+    return;
+  }
+
+  const rect = (event && event.currentTarget ? event.currentTarget : root).getBoundingClientRect();
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+  const radius = Math.hypot(
+    Math.max(x, window.innerWidth - x),
+    Math.max(y, window.innerHeight - y)
+  );
+
+  root.style.setProperty("--tx", `${x}px`);
+  root.style.setProperty("--ty", `${y}px`);
+  root.style.setProperty("--radius", `${radius}px`);
+  root.classList.add("theme-animating");
+
+  const cleanup = () => {
+    root.classList.remove("theme-animating");
+    root.style.removeProperty("--tx");
+    root.style.removeProperty("--ty");
+    root.style.removeProperty("--radius");
+  };
+
+  const transition = document.startViewTransition(() => applyTheme(next));
+  transition.finished.finally(cleanup);
 }
 
 /* ---------------- Tab routing ---------------- */

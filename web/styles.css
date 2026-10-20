@@ -700,7 +700,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ---------- Theme switch: reliable color fade ---------- */
+/* ---------- Theme switch ---------- */
 
 @media (prefers-reduced-motion: no-preference) {
   body,
@@ -713,6 +713,23 @@ button { font: inherit; color: inherit; cursor: pointer; }
   .btn {
     transition: background-color .25s ease, color .25s ease, border-color .25s ease;
   }
+}
+
+/* Circular reveal saat ganti tema (View Transitions API).
+   Animasi hanya pada ::view-transition-new(root); tidak mengubah
+   stacking atau blend-mode agar tidak meninggalkan state yang rusak. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+}
+
+html.theme-animating::view-transition-new(root) {
+  clip-path: circle(0px at var(--tx, 50%) var(--ty, 50%));
+  animation: theme-reveal .5s ease-out forwards;
+}
+
+@keyframes theme-reveal {
+  to { clip-path: circle(var(--radius, 150%) at var(--tx, 50%) var(--ty, 50%)); }
 }
 
 @media (prefers-reduced-motion: reduce) {
