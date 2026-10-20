@@ -700,32 +700,18 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ---------- Dark-mode circular reveal (View Transitions API) ---------- */
+/* ---------- Theme switch: reliable color fade ---------- */
 
-::view-transition-old(root),
-::view-transition-new(root) {
-  animation: none;
-  mix-blend-mode: normal;
-}
-
-::view-transition-old(root) { z-index: 1; }
-::view-transition-new(root) { z-index: 9999; }
-
-html.theme-animating::view-transition-new(root) {
-  clip-path: circle(0px at var(--tx, 50%) var(--ty, 0%));
-  animation: theme-reveal .55s ease-out forwards;
-}
-
-@keyframes theme-reveal {
-  to { clip-path: circle(var(--radius, 150%) at var(--tx, 50%) var(--ty, 0%)); }
-}
-
-/* Fallback when View Transitions unsupported: subtle color fade */
 @media (prefers-reduced-motion: no-preference) {
-  :root:not(.vt-supported) body,
-  :root:not(.vt-supported) .card,
-  :root:not(.vt-supported) .app-header {
-    transition: background-color .3s ease, color .3s ease, border-color .3s ease;
+  body,
+  .card,
+  .app-header,
+  .tab,
+  input,
+  textarea,
+  select,
+  .btn {
+    transition: background-color .25s ease, color .25s ease, border-color .25s ease;
   }
 }
 

@@ -66,31 +66,11 @@ function initTheme() {
   }
   const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
   applyTheme(saved === "dark" || saved === "light" ? saved : prefersDark ? "dark" : "light");
-  if (document.startViewTransition) {
-    document.documentElement.classList.add("vt-supported");
-  }
 }
 
-function toggleTheme(event) {
+function toggleTheme() {
   const current = document.documentElement.dataset.theme;
-  const next = current === "dark" ? "light" : "dark";
-  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-  if (document.startViewTransition && !reduce) {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const x = rect.left + rect.width / 2;
-    const y = rect.top + rect.height / 2;
-    const radius = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
-    const root = document.documentElement;
-    root.style.setProperty("--tx", `${x}px`);
-    root.style.setProperty("--ty", `${y}px`);
-    root.style.setProperty("--radius", `${radius}px`);
-    root.classList.add("theme-animating");
-    const transition = document.startViewTransition(() => applyTheme(next));
-    transition.finished.finally(() => root.classList.remove("theme-animating"));
-  } else {
-    applyTheme(next);
-  }
+  applyTheme(current === "dark" ? "light" : "dark");
 }
 
 /* ---------------- Tab routing ---------------- */
