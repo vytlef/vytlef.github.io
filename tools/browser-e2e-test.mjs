@@ -1,6 +1,6 @@
 /*
- * Uji end-to-end di browser sungguhan (Chrome/Edge via Playwright) untuk
- * alur sembunyikan -> unduh -> buka -> dekripsi, serta vault Memo (PIN).
+ * Uji end-to-end di browser sungguhan (Chrome/Edge/Brave via Playwright) untuk
+ * alur sembunyikan -> unduh -> buka -> dekripsi, "Gunakan Lagi", dan vault Memo.
  *
  * Jalankan server lebih dulu, mis.:
  *   go run .            (PORT default 8080)
@@ -11,11 +11,17 @@
  *
  * Variabel lingkungan:
  *   CRYPTOPIC_URL       default http://127.0.0.1:8080
- *   CRYPTOPIC_BROWSER   path ke chrome.exe / msedge.exe
+ *   CRYPTOPIC_BROWSER   path ke chrome.exe / msedge.exe / brave.exe
+ *                       contoh Brave:
+ *                       "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe"
+ *   CRYPTOPIC_PROFILE   folder profil khusus (mis. untuk Brave). Jika diisi, uji
+ *                       memakai persistent context dan menyiapkan profil dengan
+ *                       Shields dimatikan untuk origin uji (farbling Brave
+ *                       merusak LSB steganografi). Gunakan folder sementara.
  *   RUNS                jumlah iterasi per mode (default 5)
  */
 import { chromium } from "playwright-core";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import zlib from "node:zlib";
@@ -25,6 +31,8 @@ const BROWSER_PATH =
   process.env.CRYPTOPIC_BROWSER ||
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 const RUNS = Number(process.env.RUNS || 5);
+const PROFILE_DIR = process.env.CRYPTOPIC_PROFILE || "";
+let sharedContext = null;
 const PASSWORD = "Sandi Uji Kuat 2026!";
 
 const CRC_TABLE = (() => {
@@ -108,6 +116,30 @@ function assert(condition, message) {
 }
 
 async function newPage(browser, viewport, options = {}) {
+  if (sharedContext) {
+    const page = await sharedContext.newPage();
+    const pageErrors = [];
+    page.on("pageerror", (error) => pageErrors.push(String(error)));
+    page.on("dialog", (dialog) => dialog.accept().catch(() => {}));
+    await page.setViewportSize(viewport);
+    if (options.isMobile) {
+      const cdp = await sharedContext.newCDPSession(page);
+      await cdp.send("Emulation.setDeviceMetricsOverride", {
+        width: viewport.width,
+        height: viewport.height,
+        deviceScaleFactor: options.deviceScaleFactor || 1,
+        mobile: true,
+      });
+      await cdp.send("Emulation.setTouchEmulationEnabled", {
+        enabled: !!options.hasTouch,
+        maxTouchPoints: 5,
+      });
+    }
+    await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector("#tab-hide", { timeout: 30000 });
+    return { context: null, page, pageErrors, close: () => page.close() };
+  }
+
   const context = await browser.newContext({
     viewport,
     acceptDownloads: true,
@@ -121,7 +153,7 @@ async function newPage(browser, viewport, options = {}) {
   page.on("dialog", (dialog) => dialog.accept().catch(() => {}));
   await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("#tab-hide", { timeout: 30000 });
-  return { context, page, pageErrors };
+  return { context, page, pageErrors, close: () => context.close() };
 }
 
 async function hideMessage(page, coverPath, message, hint) {
@@ -135,7 +167,21 @@ async function hideMessage(page, coverPath, message, hint) {
     timeout: 15000,
   });
   await page.click("#btn-encrypt");
-  await page.waitForSelector("#hide-result:not([hidden])", { timeout: 120000 });
+  await page.waitForFunction(
+    () => {
+      const result = document.querySelector("#hide-result");
+      const status = document.querySelector("#hide-status");
+      return !result.hidden || (!status.hidden && status.classList.contains("error"));
+    },
+    null,
+    { timeout: 120000 }
+  );
+  const failure = await page.evaluate(() => {
+    const status = document.querySelector("#hide-status");
+    return status.hidden ? "" : status.textContent || "";
+  });
+  assert(!failure, `Enkripsi gagal: ${failure}`);
+  await page.waitForSelector("#hide-result:not([hidden])", { timeout: 15000 });
   await page.waitForSelector("#btn-download:not([hidden])", { timeout: 15000 });
 }
 
@@ -168,7 +214,7 @@ async function openMessage(page, stegoPath, password) {
 }
 
 async function runFlow(browser, { label, viewport, isMobile, hasTouch, deviceScaleFactor }, coverPath, workDir, iteration) {
-  const { context, page, pageErrors } = await newPage(browser, viewport, {
+  const { page, pageErrors, close } = await newPage(browser, viewport, {
     isMobile,
     hasTouch,
     deviceScaleFactor,
@@ -209,12 +255,202 @@ async function runFlow(browser, { label, viewport, isMobile, hasTouch, deviceSca
     assert(clearedOpen === "", "Kata sandi open tidak dibersihkan setelah dekripsi.");
     assert(pageErrors.length === 0, `Ada error halaman: ${pageErrors.join(" | ")}`);
   } finally {
-    await context.close();
+    await close();
+  }
+}
+
+async function runReuseFlow(browser, viewport, coverPath, workDir) {
+  const { page, pageErrors, close } = await newPage(browser, viewport);
+  try {
+    const first = `Pesan pertama ${Date.now()}`;
+    await hideMessage(page, coverPath, first, "hint pertama");
+    const firstPath = join(workDir, "stego-reuse-1.png");
+    await downloadResult(page, firstPath);
+
+    const openedFirst = await openMessage(page, firstPath, PASSWORD);
+    assert(openedFirst === first, "Dekripsi gambar pertama gagal.");
+
+    // Tombol di kartu hasil.
+    await page.click("#btn-reuse");
+    await page.waitForSelector("#cleanse-overlay:not([hidden])", { timeout: 15000 });
+    await page.waitForFunction(() => document.querySelector("#cleanse-overlay").hidden, null, {
+      timeout: 120000,
+    });
+    await page.waitForSelector("#view-hide.active", { timeout: 15000 });
+    await page.waitForSelector("#hide-preview-wrap:not([hidden])", { timeout: 15000 });
+    const cleanName = await page.textContent("#hide-file-name");
+    assert(
+      cleanName.startsWith("cryptopic-bersih-"),
+      `Nama file hasil pembersihan tidak sesuai: ${cleanName}`
+    );
+    assert(
+      (await page.inputValue("#hide-password")) === "",
+      "Kata sandi hide harus kosong setelah Gunakan Lagi."
+    );
+
+    // Pesan baru di gambar yang sudah dibersihkan.
+    const second = `Pesan kedua ${Date.now()}`;
+    await page.fill("#secret-text", second);
+    await page.fill("#hide-hint", "hint kedua");
+    await page.fill("#hide-password", PASSWORD);
+    await page.waitForFunction(() => !document.querySelector("#btn-encrypt").disabled, null, {
+      timeout: 15000,
+    });
+    await page.click("#btn-encrypt");
+    await page.waitForSelector("#hide-result:not([hidden])", { timeout: 120000 });
+    const secondPath = join(workDir, "stego-reuse-2.png");
+    await downloadResult(page, secondPath);
+
+    const openedSecond = await openMessage(page, secondPath, PASSWORD);
+    assert(openedSecond === second, "Dekripsi gambar hasil pemakaian ulang gagal.");
+    const hintSecond = await page.textContent("#open-hint-text");
+    assert(hintSecond === "hint kedua", `Petunjuk tidak cocok: ${hintSecond}`);
+
+    // Tombol di area pratinjau (gambar stego kedua masih terbuka).
+    await page.click("#btn-reuse-preview");
+    await page.waitForSelector("#cleanse-overlay:not([hidden])", { timeout: 15000 });
+    await page.waitForFunction(() => document.querySelector("#cleanse-overlay").hidden, null, {
+      timeout: 120000,
+    });
+    await page.waitForSelector("#view-hide.active", { timeout: 15000 });
+
+    assert(pageErrors.length === 0, `Ada error halaman: ${pageErrors.join(" | ")}`);
+  } finally {
+    await close();
+  }
+}
+
+async function runLegacyVaultMigration(browser, viewport) {
+  const { page, pageErrors, close } = await newPage(browser, viewport);
+  const LEGACY_PIN = "246810";
+  try {
+    // Tulis vault lama (PBKDF2, tanpa field kdf) langsung ke IndexedDB.
+    await page.evaluate(async (pin) => {
+      const enc = new TextEncoder();
+      const openDb = () =>
+        new Promise((resolve, reject) => {
+          const req = indexedDB.open("cryptopic", 1);
+          req.onupgradeneeded = () => {
+            if (!req.result.objectStoreNames.contains("memos")) {
+              req.result.createObjectStore("memos", { keyPath: "id" });
+            }
+          };
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+
+      const db = await openDb();
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const base = await crypto.subtle.importKey("raw", enc.encode(pin), "PBKDF2", false, [
+        "deriveKey",
+      ]);
+      const key = await crypto.subtle.deriveKey(
+        { name: "PBKDF2", salt, iterations: 600000, hash: "SHA-256" },
+        base,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt"]
+      );
+      const encryptString = async (text) => {
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const data = new Uint8Array(
+          await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(text))
+        );
+        return { iv, data };
+      };
+
+      const verifier = await encryptString("cryptopic-memo-vault-v1");
+      const memo = await encryptString(
+        JSON.stringify({ text: "Memo lama sebelum migrasi", hint: "legacy", fileName: "lama.png" })
+      );
+
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction("memos", "readwrite");
+        const store = tx.objectStore("memos");
+        store.clear();
+        store.put({
+          id: "__vault__",
+          salt,
+          verifierIv: verifier.iv,
+          verifier: verifier.data,
+        });
+        store.put({
+          id: "legacy-memo-1",
+          createdAt: new Date().toISOString(),
+          enc: 1,
+          iv: memo.iv,
+          data: memo.data,
+        });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+    }, LEGACY_PIN);
+
+    // Muat ulang agar vault lama terbaca, lalu buka dengan PIN 6 karakter.
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForSelector("#tab-memo", { timeout: 30000 });
+    await page.click("#tab-memo");
+    await page.waitForFunction(
+      () => document.querySelector("#vault-desc").textContent.includes("terkunci"),
+      null,
+      { timeout: 30000 }
+    );
+    await page.click("#btn-vault-primary");
+    await page.fill("#vault-pin", LEGACY_PIN);
+    await page.click("#btn-vault-submit");
+    await page.waitForFunction(
+      () => document.querySelector("#vault-desc").textContent.includes("terbuka"),
+      null,
+      { timeout: 60000 }
+    );
+    await page.waitForSelector(".memo-item", { timeout: 20000 });
+
+    // Record vault harus sudah dimigrasikan ke Argon2id.
+    const migrated = await page.evaluate(async () => {
+      const db = await new Promise((resolve, reject) => {
+        const req = indexedDB.open("cryptopic", 1);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      const record = await new Promise((resolve, reject) => {
+        const req = db.transaction("memos", "readonly").objectStore("memos").get("__vault__");
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      db.close();
+      return record
+        ? { v: record.v, kdf: record.kdf || null, hasSalt: !!record.salt }
+        : null;
+    });
+    assert(migrated && migrated.v === 2 && migrated.hasSalt, "Vault tidak bermigrasi ke v2.");
+    assert(
+      migrated.kdf && migrated.kdf.memorySize === 65536 && migrated.kdf.iterations === 3,
+      "Parameter KDF hasil migrasi tidak sesuai Argon2id."
+    );
+
+    // Setelah reload, PIN yang sama harus tetap membuka vault baru.
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForSelector("#tab-memo", { timeout: 30000 });
+    await page.click("#tab-memo");
+    await page.click("#btn-vault-primary");
+    await page.fill("#vault-pin", LEGACY_PIN);
+    await page.click("#btn-vault-submit");
+    await page.waitForFunction(
+      () => document.querySelector("#vault-desc").textContent.includes("terbuka"),
+      null,
+      { timeout: 60000 }
+    );
+    await page.waitForSelector(".memo-item", { timeout: 20000 });
+
+    assert(pageErrors.length === 0, `Ada error halaman: ${pageErrors.join(" | ")}`);
+  } finally {
+    await close();
   }
 }
 
 async function runMemoVault(browser, viewport, coverPath, workDir) {
-  const { context, page, pageErrors } = await newPage(browser, viewport, {
+  const { page, pageErrors, close } = await newPage(browser, viewport, {
     isMobile: true,
     hasTouch: true,
     deviceScaleFactor: 3,
@@ -229,8 +465,8 @@ async function runMemoVault(browser, viewport, coverPath, workDir) {
     // Aktifkan PIN memo.
     await page.click("#tab-memo");
     await page.click("#btn-vault-primary");
-    await page.fill("#vault-pin", "246810");
-    await page.fill("#vault-pin-confirm", "246810");
+    await page.fill("#vault-pin", "24681024");
+    await page.fill("#vault-pin-confirm", "24681024");
     await page.click("#btn-vault-submit");
     await page.waitForFunction(
       () => document.querySelector("#vault-desc").textContent.includes("terbuka"),
@@ -263,7 +499,7 @@ async function runMemoVault(browser, viewport, coverPath, workDir) {
     await page.fill("#vault-pin", "000000");
     await page.click("#btn-vault-submit");
     await page.waitForSelector("#vault-error:not([hidden])", { timeout: 30000 });
-    await page.fill("#vault-pin", "246810");
+    await page.fill("#vault-pin", "24681024");
     await page.click("#btn-vault-submit");
     await page.waitForFunction(
       () => document.querySelector("#vault-desc").textContent.includes("terbuka"),
@@ -282,8 +518,29 @@ async function runMemoVault(browser, viewport, coverPath, workDir) {
 
     assert(pageErrors.length === 0, `Ada error halaman: ${pageErrors.join(" | ")}`);
   } finally {
-    await context.close();
+    await close();
   }
+}
+
+/**
+ * Brave mengacak piksel canvas (anti-fingerprinting) sehingga LSB stego rusak.
+ * Untuk uji Brave, siapkan profil yang mematikan Shields untuk origin ini.
+ */
+async function prepareShieldsProfile(dir) {
+  const key = `${new URL(BASE_URL).origin},*`;
+  const now = String(Date.now() * 1000);
+  const prefs = {
+    profile: {
+      content_settings: {
+        exceptions: {
+          braveShields: { [key]: { setting: 1, last_modified: now } },
+          brave_webcompat_canvas: { [key]: { setting: 1, last_modified: now } },
+        },
+      },
+    },
+  };
+  await mkdir(join(dir, "Default"), { recursive: true });
+  await writeFile(join(dir, "Default", "Preferences"), JSON.stringify(prefs));
 }
 
 async function main() {
@@ -291,7 +548,17 @@ async function main() {
   const coverPath = join(workDir, "cover.png");
   await writeFile(coverPath, makeCoverPng(512, 512, 7));
 
-  const browser = await chromium.launch({ executablePath: BROWSER_PATH, headless: true });
+  let browser = null;
+  if (PROFILE_DIR) {
+    await prepareShieldsProfile(PROFILE_DIR);
+    sharedContext = await chromium.launchPersistentContext(PROFILE_DIR, {
+      executablePath: BROWSER_PATH,
+      headless: true,
+      acceptDownloads: true,
+    });
+  } else {
+    browser = await chromium.launch({ executablePath: BROWSER_PATH, headless: true });
+  }
 
   const desktop = { label: "desktop", viewport: { width: 1440, height: 900 } };
   const mobile = {
@@ -304,13 +571,13 @@ async function main() {
 
   // Pemanasan: pastikan server & aset siap.
   await step("Halaman utama memuat tanpa error", async () => {
-    const { context, page, pageErrors } = await newPage(browser, desktop.viewport);
+    const { page, pageErrors, close } = await newPage(browser, desktop.viewport);
     try {
       await page.click("#tab-open");
       await page.waitForSelector("#open-drop", { timeout: 15000 });
       assert(pageErrors.length === 0, `Error halaman: ${pageErrors.join(" | ")}`);
     } finally {
-      await context.close();
+      await close();
     }
   });
 
@@ -323,12 +590,20 @@ async function main() {
     );
   }
 
+  await step("Gunakan Lagi: gambar lama dibersihkan lalu dipakai untuk pesan baru", () =>
+    runReuseFlow(browser, desktop.viewport, coverPath, workDir)
+  );
+
   await step("Vault Memo (PIN): simpan, kunci, buka, matikan PIN", () =>
     runMemoVault(browser, mobile.viewport, coverPath, workDir)
   );
 
+  await step("Vault lama (PBKDF2) otomatis bermigrasi ke Argon2id", () =>
+    runLegacyVaultMigration(browser, mobile.viewport)
+  );
+
   await step("Header keamanan & service worker tidak error", async () => {
-    const { context, page, pageErrors } = await newPage(browser, desktop.viewport);
+    const { page, pageErrors, close } = await newPage(browser, desktop.viewport);
     try {
       await page.waitForTimeout(1500);
       const controlled = await page.evaluate(async () => {
@@ -344,25 +619,26 @@ async function main() {
       assert(health === "200:ok", `Health check gagal: ${health}`);
       assert(pageErrors.length === 0, `Error halaman: ${pageErrors.join(" | ")}`);
     } finally {
-      await context.close();
+      await close();
     }
   });
 
   await step("Mode offline: shell dimuat dari service worker", async () => {
-    const { context, page, pageErrors } = await newPage(browser, desktop.viewport);
+    const { page, pageErrors, close } = await newPage(browser, desktop.viewport);
     try {
       await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 30000 });
-      await context.setOffline(true);
+      await page.context().setOffline(true);
       await page.reload({ waitUntil: "domcontentloaded" });
       await page.waitForSelector("#tab-hide", { timeout: 30000 });
       assert(pageErrors.length === 0, `Error halaman offline: ${pageErrors.join(" | ")}`);
     } finally {
-      await context.setOffline(false).catch(() => {});
-      await context.close();
+      await page.context().setOffline(false).catch(() => {});
+      await close();
     }
   });
 
-  await browser.close();
+  if (sharedContext) await sharedContext.close();
+  else await browser.close();
 
   console.log(`\n${passed} langkah lulus, ${failures.length} gagal.`);
   if (failures.length > 0) {

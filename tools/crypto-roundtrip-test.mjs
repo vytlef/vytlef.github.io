@@ -281,7 +281,7 @@ await check("V3 round trips repeated with header-stored KDF parameters", async (
 });
 
 await check("V3 stores custom KDF parameters in the header and honours them", async () => {
-  const kdf = { memorySize: 1024, iterations: 1, parallelism: 1 };
+  const kdf = { memorySize: 8192, iterations: 1, parallelism: 1 };
   const result = await makeV3("Parameter KDF kustom.", "Sandi KDF kustom 2026", "kdf", makeCover(192, 192), kdf);
   assert.deepEqual(result.parsed.kdf, kdf);
   assert.equal(await cryptoPic.decryptPayload("Sandi KDF kustom 2026", result.parsed, result.body, result.keys), "Parameter KDF kustom.");
@@ -377,6 +377,70 @@ await check("V3 capacity estimator is respected at and beyond the limit", async 
     stego.embedPayload(makeCover(width, height), over.payload, over.stegoKey),
     (error) => error && error.code === "TOO_LARGE"
   );
+});
+
+await check("V3 rejects unreasonable KDF parameters", async () => {
+  const { payload } = await cryptoPic.encryptPayloadV3("Sandi KDF 2026", "pesan", "kdf");
+  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+
+  const tooMuchMemory = new Uint8Array(payload);
+  new DataView(tooMuchMemory.buffer).setUint32(9, 1024 * 1024, false); // 1 GiB
+  assert.throws(
+    () => cryptoPic.parsePayload(tooMuchMemory),
+    (error) => error && error.code === "CORRUPT"
+  );
+
+  const tooMuchWork = new Uint8Array(payload);
+  const workView = new DataView(tooMuchWork.buffer);
+  workView.setUint32(9, 256 * 1024, false); // 256 MiB
+  tooMuchWork[13] = 8; // 8 iterasi → 2 GiB·iter > batas 512 MiB·iter
+  assert.throws(
+    () => cryptoPic.parsePayload(tooMuchWork),
+    (error) => error && error.code === "CORRUPT"
+  );
+
+  assert.equal(view.getUint32(9, false), cryptoPic.V3_KDF.memorySize);
+  assert.ok(cryptoPic.isKdfAcceptable(cryptoPic.V3_KDF));
+  assert.ok(!cryptoPic.isKdfAcceptable({ memorySize: 8, iterations: 1, parallelism: 1 }));
+  assert.ok(!cryptoPic.isKdfAcceptable({ memorySize: 65536, iterations: 3, parallelism: 0 }));
+});
+
+await check("Sanitasi menghapus payload dan mempertahankan dimensi", async () => {
+  const { image } = await makeV3("Pesan yang harus musnah.", "Sandi bersih 2026", "bersih");
+
+  let clean = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const candidate = stego.sanitizeImageData(image);
+    let readable = false;
+    try {
+      cryptoPic.parsePayload(stego.extractPayload(candidate));
+      readable = true;
+    } catch {
+      readable = false;
+    }
+    if (!readable) {
+      clean = candidate;
+      break;
+    }
+  }
+
+  assert.ok(clean, "Sanitasi harus menghapus payload lama.");
+  assert.equal(clean.width, image.width);
+  assert.equal(clean.height, image.height);
+  assert.equal(
+    stego.maxMessageBytesV3(clean.width, clean.height, "baru"),
+    stego.maxMessageBytesV3(image.width, image.height, "baru")
+  );
+
+  let maxDelta = 0;
+  for (let i = 0; i < image.data.length; i++) {
+    if (i % 4 === 3) {
+      assert.equal(clean.data[i], 255);
+      continue;
+    }
+    maxDelta = Math.max(maxDelta, Math.abs(clean.data[i] - image.data[i]));
+  }
+  assert.ok(maxDelta <= 1, `Perubahan pixel harus maksimal 1, dapat ${maxDelta}.`);
 });
 
 console.log(`\n${passed} test groups passed in ${((performance.now() - started) / 1000).toFixed(1)}s.`);
