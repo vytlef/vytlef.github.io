@@ -52,6 +52,11 @@
 
   <main class="app-main">
 
+    <div class="pixel-warning" id="pixel-warning" role="alert" hidden>
+      <strong>Shields browser mengubah piksel.</strong>
+      <span>Perlindungan fingerprinting (mis. Brave Shields) mengacak piksel canvas sehingga pesan tidak bisa disisipkan atau dibaca dengan benar. Matikan Shields untuk situs ini, lalu muat ulang halaman.</span>
+    </div>
+
     <!-- ===================== VIEW: SEMBUNYIKAN ===================== -->
     <section class="view active" id="view-hide" role="tabpanel" aria-labelledby="tab-hide">
       <div class="card hide-card">
@@ -167,6 +172,7 @@
                 <span id="open-file-dims"></span>
               </div>
               <button class="btn btn-ghost btn-sm" id="open-replace" type="button">Ganti gambar</button>
+              <button class="btn btn-ghost btn-sm" id="btn-reuse-preview" type="button">Gunakan Lagi</button>
             </div>
           </div>
 
@@ -183,6 +189,7 @@
               <pre class="message-box" id="open-message"></pre>
               <div class="result-actions">
                 <button class="btn btn-ghost btn-sm" id="btn-copy-message" type="button">Salin teks</button>
+                <button class="btn btn-ghost btn-sm" id="btn-reuse" type="button">Gunakan Lagi</button>
                 <button class="btn btn-ghost btn-sm" id="btn-close-result" type="button">Tutup</button>
               </div>
             </div>
@@ -236,7 +243,7 @@
             </div>
           </div>
           <div class="vault-form" id="vault-form" hidden>
-            <input type="password" id="vault-pin" class="input" autocomplete="new-password" placeholder="PIN memo (min. 6 karakter)">
+            <input type="password" id="vault-pin" class="input" autocomplete="new-password" placeholder="PIN memo (min. 8 karakter)">
             <input type="password" id="vault-pin-confirm" class="input" autocomplete="new-password" placeholder="Ulangi PIN">
             <div class="vault-form-actions">
               <button class="btn btn-primary btn-sm" id="btn-vault-submit" type="button">Simpan</button>
@@ -290,6 +297,28 @@
   </footer>
 
   <div class="toast-container" id="toast-container" aria-live="polite"></div>
+
+  <div class="cleanse-overlay" id="cleanse-overlay" role="status" aria-live="polite" hidden>
+    <div class="cleanse-modal">
+      <div class="cleanse-visual">
+        <img id="cleanse-thumb" alt="">
+        <span class="cleanse-sweep" aria-hidden="true"></span>
+        <span class="cleanse-ring" aria-hidden="true"></span>
+        <span class="cleanse-particle" aria-hidden="true"></span>
+        <span class="cleanse-particle" aria-hidden="true"></span>
+        <span class="cleanse-particle" aria-hidden="true"></span>
+        <span class="cleanse-particle" aria-hidden="true"></span>
+        <span class="cleanse-particle" aria-hidden="true"></span>
+        <span class="cleanse-particle" aria-hidden="true"></span>
+        <span class="cleanse-particle" aria-hidden="true"></span>
+        <span class="cleanse-particle" aria-hidden="true"></span>
+        <span class="cleanse-particle" aria-hidden="true"></span>
+        <span class="cleanse-particle" aria-hidden="true"></span>
+      </div>
+      <p class="cleanse-stage" id="cleanse-stage">Membaca piksel…</p>
+      <p class="cleanse-note">Tekan Esc untuk menutup animasi</p>
+    </div>
+  </div>
 
   <script type="module" src="js/app.js?v=__BUILD_VERSION__"></script>
 </body>

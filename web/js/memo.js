@@ -1,3 +1,5 @@
+import { deriveArgon2KeyBytes, isKdfAcceptable } from "./crypto.js";
+
 const DB_NAME = "cryptopic";
 const DB_VERSION = 1;
 const STORE = "memos";
@@ -5,12 +7,16 @@ const LEGACY_INDEX_KEY = "cryptopic:index";
 const LEGACY_MEMO_PREFIX = "cryptopic:memo:";
 const VAULT_ID = "__vault__";
 const VAULT_CHECK = "cryptopic-memo-vault-v1";
+const VAULT_VERSION = 2;
 const PBKDF2_ITERATIONS = 600000;
 
 export const MAX_BYTES = 200 * 1024 * 1024;
 const WARN_PERCENT = 80;
 const CRITICAL_PERCENT = 95;
-export const MIN_PIN_LENGTH = 6;
+export const MIN_PIN_LENGTH = 8;
+
+/** Parameter Argon2id untuk vault Memo. p=1 agar buka kunci tetap wajar di ponsel. */
+const VAULT_KDF = Object.freeze({ memorySize: 65536, iterations: 3, parallelism: 1 });
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -18,7 +24,7 @@ const decoder = new TextDecoder();
 let dbPromise = null;
 let ready = false;
 let cache = [];
-let vaultRecord = null;
+let vaultRecord = null; // { salt, verifierIv, verifier, kdf } — kdf null berarti vault lama (PBKDF2)
 let vaultKey = null;
 let unlocked = false;
 let rawEncrypted = [];
@@ -86,7 +92,7 @@ function toBytes(text) {
   return encoder.encode(text);
 }
 
-async function deriveVaultKey(pin, salt) {
+async function deriveVaultKeyLegacy(pin, salt) {
   const base = await crypto.subtle.importKey("raw", toBytes(pin), "PBKDF2", false, ["deriveKey"]);
   return crypto.subtle.deriveKey(
     { name: "PBKDF2", salt, iterations: PBKDF2_ITERATIONS, hash: "SHA-256" },
@@ -95,6 +101,16 @@ async function deriveVaultKey(pin, salt) {
     false,
     ["encrypt", "decrypt"]
   );
+}
+
+async function deriveVaultKeyArgon2(pin, salt, kdf) {
+  const raw = await deriveArgon2KeyBytes(pin, salt, kdf);
+  const key = await crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, [
+    "encrypt",
+    "decrypt",
+  ]);
+  raw.fill(0);
+  return key;
 }
 
 async function encryptString(key, text) {
@@ -144,7 +160,12 @@ export async function enableMemoPin(pin) {
   }
 
   const salt = crypto.getRandomValues(new Uint8Array(16));
-  const key = await deriveVaultKey(pin, salt);
+  let key;
+  try {
+    key = await deriveVaultKeyArgon2(pin, salt, VAULT_KDF);
+  } catch {
+    return { ok: false, reason: "CRYPTO" };
+  }
   const verifier = await encryptString(key, VAULT_CHECK);
 
   const records = [];
@@ -167,18 +188,89 @@ export async function enableMemoPin(pin) {
     const tx = db.transaction(STORE, "readwrite");
     const store = tx.objectStore(STORE);
     store.clear();
-    store.put({ id: VAULT_ID, salt, verifierIv: verifier.iv, verifier: verifier.data });
+    store.put({
+      id: VAULT_ID,
+      v: VAULT_VERSION,
+      kdf: { ...VAULT_KDF },
+      salt,
+      verifierIv: verifier.iv,
+      verifier: verifier.data,
+    });
     for (const record of records) store.put(record);
     await txDone(tx);
   } catch {
     return { ok: false, reason: "QUOTA" };
   }
 
-  vaultRecord = { salt, verifierIv: verifier.iv, verifier: verifier.data };
+  vaultRecord = {
+    salt,
+    verifierIv: verifier.iv,
+    verifier: verifier.data,
+    kdf: { ...VAULT_KDF },
+  };
   vaultKey = key;
   unlocked = true;
   rawEncrypted = records;
   return { ok: true };
+}
+
+/**
+ * Naikkan vault lama (PBKDF2) ke Argon2id. Dipanggil setelah PIN terbukti benar.
+ * Gagal migrasi tidak boleh menggagalkan unlock — vault lama tetap dipakai.
+ */
+async function migrateVaultToArgon2(pin) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  let key;
+  try {
+    key = await deriveVaultKeyArgon2(pin, salt, VAULT_KDF);
+  } catch {
+    return false;
+  }
+
+  const verifier = await encryptString(key, VAULT_CHECK);
+  const records = [];
+  for (const memo of cache) {
+    const payload = await encryptString(
+      key,
+      JSON.stringify({ text: memo.text, hint: memo.hint, fileName: memo.fileName })
+    );
+    records.push({
+      id: memo.id,
+      createdAt: memo.createdAt,
+      enc: 1,
+      iv: payload.iv,
+      data: payload.data,
+    });
+  }
+
+  try {
+    const db = await openDB();
+    const tx = db.transaction(STORE, "readwrite");
+    const store = tx.objectStore(STORE);
+    store.clear();
+    store.put({
+      id: VAULT_ID,
+      v: VAULT_VERSION,
+      kdf: { ...VAULT_KDF },
+      salt,
+      verifierIv: verifier.iv,
+      verifier: verifier.data,
+    });
+    for (const record of records) store.put(record);
+    await txDone(tx);
+  } catch {
+    return false;
+  }
+
+  vaultRecord = {
+    salt,
+    verifierIv: verifier.iv,
+    verifier: verifier.data,
+    kdf: { ...VAULT_KDF },
+  };
+  vaultKey = key;
+  rawEncrypted = records;
+  return true;
 }
 
 export async function unlockMemos(pin) {
@@ -186,7 +278,16 @@ export async function unlockMemos(pin) {
   if (!vaultRecord) return { ok: true };
   if (typeof pin !== "string" || pin.length === 0) return { ok: false, reason: "WRONG_PIN" };
 
-  const key = await deriveVaultKey(pin, vaultRecord.salt);
+  const legacy = !vaultRecord.kdf;
+  let key;
+  try {
+    key = legacy
+      ? await deriveVaultKeyLegacy(pin, vaultRecord.salt)
+      : await deriveVaultKeyArgon2(pin, vaultRecord.salt, vaultRecord.kdf);
+  } catch {
+    return { ok: false, reason: "CRYPTO" };
+  }
+
   try {
     const check = await decryptString(key, vaultRecord.verifierIv, vaultRecord.verifier);
     if (check !== VAULT_CHECK) return { ok: false, reason: "WRONG_PIN" };
@@ -224,7 +325,9 @@ export async function unlockMemos(pin) {
 
   vaultKey = key;
   unlocked = true;
-  return { ok: true };
+
+  const migrated = legacy ? await migrateVaultToArgon2(pin) : false;
+  return { ok: true, migrated };
 }
 
 export function lockMemos() {
@@ -304,10 +407,19 @@ export async function initStorage() {
     const storedVault = all.find((record) => record && record.id === VAULT_ID);
 
     if (storedVault && storedVault.salt && storedVault.verifier) {
+      const kdfOk =
+        storedVault.v === VAULT_VERSION && isKdfAcceptable(storedVault.kdf);
       vaultRecord = {
         salt: new Uint8Array(storedVault.salt),
         verifierIv: new Uint8Array(storedVault.verifierIv),
         verifier: new Uint8Array(storedVault.verifier),
+        kdf: kdfOk
+          ? {
+              memorySize: storedVault.kdf.memorySize,
+              iterations: storedVault.kdf.iterations,
+              parallelism: storedVault.kdf.parallelism,
+            }
+          : null,
       };
       vaultKey = null;
       unlocked = false;

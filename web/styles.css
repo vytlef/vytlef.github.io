@@ -960,3 +960,159 @@ html.theme-animating::view-transition-new(root) {
 @media (max-width: 899px) {
   .open-result-placeholder { display: none; }
 }
+
+/* ---------- Peringatan piksel tidak stabil (Brave Shields) ---------- */
+
+.pixel-warning {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft);
+  color: var(--text);
+  font-size: .85rem;
+  line-height: 1.45;
+}
+
+.pixel-warning[hidden] { display: none; }
+.pixel-warning strong { color: var(--warn); }
+
+/* ---------- Overlay "Gunakan Lagi" (penyucian gambar) ---------- */
+
+body.cleansing { overflow: hidden; }
+
+.cleanse-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: var(--overlay);
+  backdrop-filter: blur(3px);
+  animation: cleanse-fade .18s ease;
+}
+
+.cleanse-overlay[hidden] { display: none; }
+
+.cleanse-modal {
+  width: min(320px, 88vw);
+  padding: 20px 20px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+
+.cleanse-visual {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-sunken);
+  isolation: isolate;
+}
+
+.cleanse-visual img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: .85;
+}
+
+.cleanse-sweep {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -45%;
+  height: 45%;
+  background: linear-gradient(180deg, transparent, rgba(255, 255, 255, .8), transparent);
+  mix-blend-mode: screen;
+  animation: cleanse-sweep 1.15s ease-in-out infinite;
+}
+
+.cleanse-ring {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 70%;
+  aspect-ratio: 1;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  opacity: 0;
+  animation: cleanse-ring 1.15s ease-out infinite;
+}
+
+.cleanse-particle {
+  position: absolute;
+  bottom: -8px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0;
+  animation: cleanse-rise 1.5s ease-out infinite;
+}
+
+.cleanse-particle:nth-of-type(3) { left: 8%; animation-delay: 0s; }
+.cleanse-particle:nth-of-type(4) { left: 18%; animation-delay: .35s; }
+.cleanse-particle:nth-of-type(5) { left: 29%; animation-delay: .15s; }
+.cleanse-particle:nth-of-type(6) { left: 41%; animation-delay: .6s; }
+.cleanse-particle:nth-of-type(7) { left: 52%; animation-delay: .25s; }
+.cleanse-particle:nth-of-type(8) { left: 63%; animation-delay: .7s; }
+.cleanse-particle:nth-of-type(9) { left: 74%; animation-delay: .4s; }
+.cleanse-particle:nth-of-type(10) { left: 84%; animation-delay: .05s; }
+.cleanse-particle:nth-of-type(11) { left: 91%; animation-delay: .55s; }
+.cleanse-particle:nth-of-type(12) { left: 47%; animation-delay: .85s; }
+
+.cleanse-stage {
+  margin: 14px 0 0;
+  font-size: .9rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.cleanse-note {
+  margin: 6px 0 0;
+  font-size: .75rem;
+  color: var(--text-muted);
+}
+
+@keyframes cleanse-sweep {
+  0% { transform: translateY(0); opacity: 0; }
+  15% { opacity: 1; }
+  100% { transform: translateY(320%); opacity: 0; }
+}
+
+@keyframes cleanse-ring {
+  0% { transform: translate(-50%, -50%) scale(.35); opacity: 0; }
+  35% { opacity: .5; }
+  100% { transform: translate(-50%, -50%) scale(1.55); opacity: 0; }
+}
+
+@keyframes cleanse-rise {
+  0% { transform: translateY(0) scale(.7); opacity: 0; }
+  20% { opacity: .9; }
+  100% { transform: translateY(-190px) scale(1.1); opacity: 0; }
+}
+
+@keyframes cleanse-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cleanse-overlay,
+  .cleanse-sweep,
+  .cleanse-ring,
+  .cleanse-particle { animation: none; }
+  .cleanse-sweep { display: none; }
+  .cleanse-ring { opacity: .3; transform: translate(-50%, -50%) scale(1); }
+  .cleanse-particle { display: none; }
+}

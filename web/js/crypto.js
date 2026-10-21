@@ -18,6 +18,36 @@ const V3_NONCE_LEN = 8;
 const V3_HEADER_FIXED = 53;
 export const V3_KDF = Object.freeze({ memorySize: 65536, iterations: 3, parallelism: 4 });
 
+/**
+ * Batas parameter KDF yang boleh diterima dari header gambar.
+ * Tujuannya mencegah gambar jahat memaksa browser mengalokasikan memori
+ * raksasa atau menghitung terlalu lama (serangan DoS).
+ */
+export const KDF_LIMITS = Object.freeze({
+  memoryMin: 8 * 1024, // KiB → 8 MiB
+  memoryMax: 256 * 1024, // KiB → 256 MiB
+  iterationsMax: 8,
+  parallelismMax: 8,
+  workMax: 512 * 1024, // KiB·iterasi → 512 MiB·iter
+});
+
+export function isKdfAcceptable(kdf) {
+  if (!kdf) return false;
+  const { memorySize, iterations, parallelism } = kdf;
+  if (!Number.isInteger(memorySize) || !Number.isInteger(iterations) || !Number.isInteger(parallelism)) {
+    return false;
+  }
+  return (
+    memorySize >= KDF_LIMITS.memoryMin &&
+    memorySize <= KDF_LIMITS.memoryMax &&
+    iterations >= 1 &&
+    iterations <= KDF_LIMITS.iterationsMax &&
+    parallelism >= 1 &&
+    parallelism <= KDF_LIMITS.parallelismMax &&
+    memorySize * iterations <= KDF_LIMITS.workMax
+  );
+}
+
 const encoder = new TextEncoder();
 
 export class CryptoPicError extends Error {
@@ -170,6 +200,17 @@ export async function deriveV2Keys(password, salt, kdf = V2_KDF) {
 
 // Alias generik: parameter KDF kini dapat berasal dari header (V3).
 export const deriveKeys = deriveV2Keys;
+
+/**
+ * Turunkan kunci mentah 32 byte memakai Argon2id.
+ * Dipakai oleh vault Memo agar tidak bergantung pada PBKDF2 yang lebih lemah.
+ */
+export async function deriveArgon2KeyBytes(password, salt, kdf = V3_KDF) {
+  if (!isKdfAcceptable(kdf)) {
+    throw new CryptoPicError("KDF_INVALID", "Parameter KDF tidak wajar.");
+  }
+  return deriveArgon2Root(toBytes(normalizeV2Password(password)), salt, kdf);
+}
 
 export function overheadBytes(hint) {
   const hintLen = hint ? toBytes(hint).length : 0;
@@ -341,15 +382,8 @@ function parseV3(payload) {
   }
   // Jangan percaya parameter KDF dari header: batasi agar gambar jahat tidak
   // memaksa browser mengalokasikan memori raksasa atau menghitung terlalu lama.
-  if (
-    memorySize < 8 ||
-    memorySize > 1 << 20 ||
-    iterations < 1 ||
-    iterations > 64 ||
-    parallelism < 1 ||
-    parallelism > 16
-  ) {
-    throw new CryptoPicError("CORRUPT", "Parameter KDF pada gambar V3 tidak valid.");
+  if (!isKdfAcceptable({ memorySize, iterations, parallelism })) {
+    throw new CryptoPicError("CORRUPT", "Parameter KDF pada gambar V3 tidak wajar.");
   }
 
   let hint = "";

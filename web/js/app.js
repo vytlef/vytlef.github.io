@@ -17,6 +17,7 @@ import {
   extractPayload,
   extractProtectedBody,
   imageDataToPngBlob,
+  sanitizeToPngBlob,
   StegoError,
 } from "./stego.js";
 import {
@@ -210,6 +211,8 @@ function setupPwToggles() {
 /* ---------------- Alur: Sembunyikan ---------------- */
 
 const hideState = { img: null, width: 0, height: 0, fileName: "", stegoUrl: null, hasTransparency: false };
+let hidePreviewUrl = null;
+let openPreviewUrl = null;
 
 function hideAvailable() {
   if (!hideState.img) return 0;
@@ -339,7 +342,9 @@ async function handleHideFile(file) {
     hideState.width = img.naturalWidth;
     hideState.height = img.naturalHeight;
     hideState.fileName = file.name;
-    $("hide-preview-img").src = URL.createObjectURL(file);
+    if (hidePreviewUrl) URL.revokeObjectURL(hidePreviewUrl);
+    hidePreviewUrl = URL.createObjectURL(file);
+    $("hide-preview-img").src = hidePreviewUrl;
     $("hide-file-name").textContent = file.name;
     $("hide-file-dims").textContent = `${img.naturalWidth}×${img.naturalHeight}px`;
     $("hide-capacity").textContent = `Kapasitas pesan maks. ${formatBytes(maxMessageBytesV3(img.naturalWidth, img.naturalHeight, $("hide-hint").value.trim()))}`;
@@ -359,6 +364,16 @@ function resetHideImage() {
   hideState.imageData = null;
   hideState.fileName = "";
   hideState.hasTransparency = false;
+  if (hideState.stegoUrl) {
+    URL.revokeObjectURL(hideState.stegoUrl);
+    hideState.stegoUrl = null;
+  }
+  if (hidePreviewUrl) {
+    URL.revokeObjectURL(hidePreviewUrl);
+    hidePreviewUrl = null;
+  }
+  $("hide-preview-img").removeAttribute("src");
+  $("stego-preview").removeAttribute("src");
   $("hide-drop").hidden = false;
   $("hide-preview-wrap").hidden = true;
   $("hide-result").hidden = true;
@@ -368,6 +383,7 @@ function resetHideImage() {
 }
 
 async function doEncrypt() {
+  if (!ensureCanvasStable()) return;
   const secret = $("secret-text").value;
   const password = $("hide-password").value;
   const hint = $("hide-hint").value.trim();
@@ -428,6 +444,11 @@ function resetOpen() {
   openState.parsed = null;
   openState.imageData = null;
   openState.fileName = "";
+  if (openPreviewUrl) {
+    URL.revokeObjectURL(openPreviewUrl);
+    openPreviewUrl = null;
+  }
+  $("open-preview-img").removeAttribute("src");
   $("open-drop").hidden = false;
   $("open-preview-wrap").hidden = true;
   $("open-start-note").hidden = false;
@@ -465,7 +486,9 @@ async function handleOpenFile(file) {
     openState.imageData = imageData;
     openState.fileName = file.name;
 
-    $("open-preview-img").src = URL.createObjectURL(file);
+    if (openPreviewUrl) URL.revokeObjectURL(openPreviewUrl);
+    openPreviewUrl = URL.createObjectURL(file);
+    $("open-preview-img").src = openPreviewUrl;
     $("open-file-name").textContent = file.name;
     $("open-file-dims").textContent = `${img.naturalWidth}×${img.naturalHeight}px`;
     $("open-drop").hidden = true;
@@ -498,6 +521,7 @@ function updateDecryptButton() {
 
 async function doDecrypt() {
   if (!openState.parsed) return;
+  if (!ensureCanvasStable()) return;
   const password = $("open-password").value;
   const status = $("open-status");
   status.hidden = false;
@@ -575,6 +599,85 @@ async function autoSaveMemo(message) {
     updateMemoBadge();
   } else {
     showToast("Penyimpanan browser tidak tersedia (mode privat?) — memo tidak dapat disimpan.", "warn", 5000);
+  }
+}
+
+/* ---------------- Alur: Gunakan Lagi ---------------- */
+
+let reuseBusy = false;
+
+function waitMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function prefersReducedMotion() {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+async function handleReuseImage() {
+  if (reuseBusy || !openState.imageData) return;
+
+  const hasTypedContent =
+    $("secret-text").value.trim() !== "" ||
+    $("hide-hint").value.trim() !== "" ||
+    $("hide-password").value !== "";
+  if (hideState.img || hasTypedContent) {
+    if (!confirm("Gambar dan isian yang sedang ada di tab Sembunyikan akan diganti. Lanjutkan?")) {
+      return;
+    }
+  }
+
+  reuseBusy = true;
+  $("btn-reuse").disabled = true;
+  $("btn-reuse-preview").disabled = true;
+
+  const overlay = $("cleanse-overlay");
+  const stage = $("cleanse-stage");
+  const started = Date.now();
+  const minDuration = prefersReducedMotion() ? 350 : 1500;
+
+  $("cleanse-thumb").src = $("open-preview-img").getAttribute("src") || "";
+  stage.textContent = "Membaca piksel…";
+  overlay.hidden = false;
+  document.body.classList.add("cleansing");
+
+  try {
+    await waitMs(120);
+    stage.textContent = "Menyucikan piksel…";
+    const blob = await sanitizeToPngBlob(openState.imageData);
+
+    stage.textContent = "Menyiapkan gambar bersih…";
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    const file = new File([blob], `cryptopic-bersih-${stamp}.png`, { type: "image/png" });
+
+    const remaining = minDuration - (Date.now() - started);
+    if (remaining > 0) await waitMs(remaining);
+
+    resetHideImage();
+    $("secret-text").value = "";
+    $("hide-password").value = "";
+    $("hide-hint").value = "";
+    await handleHideFile(file);
+    if (!hideState.img) {
+      throw new Error("Gambar hasil pembersihan tidak dapat dimuat.");
+    }
+
+    switchView("hide");
+    showToast("Gambar sudah bersih. Siap dipakai lagi.", "ok", 4000);
+    await waitMs(150);
+    $("secret-text").focus();
+  } catch (err) {
+    const message = err instanceof StegoError || err instanceof Error
+      ? err.message
+      : "Gagal membersihkan gambar.";
+    showToast(message, "error", 6000);
+    if (!(err instanceof StegoError)) console.error(err);
+  } finally {
+    overlay.hidden = true;
+    document.body.classList.remove("cleansing");
+    reuseBusy = false;
+    $("btn-reuse").disabled = false;
+    $("btn-reuse-preview").disabled = false;
   }
 }
 
@@ -863,6 +966,8 @@ function vaultErrorMessage(reason) {
       return "Gagal menyimpan karena penyimpanan penuh.";
     case "UNAVAILABLE":
       return "Penyimpanan tidak tersedia.";
+    case "CRYPTO":
+      return "Modul kriptografi tidak tersedia. Muat ulang halaman lalu coba lagi.";
     default:
       return "Terjadi kesalahan.";
   }
@@ -993,7 +1098,11 @@ async function handleVaultSubmit() {
     $("vault-pin").value = "";
     vaultMode = null;
     refreshMemoView();
-    showToast("Memo terbuka.", "ok", 2500);
+    if (result.migrated) {
+      showToast("Memo terbuka. Keamanan memo ditingkatkan ke Argon2id.", "ok", 4000);
+    } else {
+      showToast("Memo terbuka.", "ok", 2500);
+    }
   }
 }
 
@@ -1010,12 +1119,55 @@ async function handleVaultDisable() {
   showToast("PIN dimatikan. Memo kembali tersimpan sebagai teks biasa.", "warn", 5000);
 }
 
+/**
+ * Deteksi perlindungan fingerprinting yang mengacak piksel canvas
+ * (mis. Brave Shields). Steganografi LSB tidak akan bertahan di lingkungan itu.
+ */
+function canvasPixelsAreStable() {
+  try {
+    const size = 16;
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return true;
+    const source = new Uint8ClampedArray(size * size * 4);
+    for (let i = 0; i < source.length; i++) source[i] = (i * 37 + 11) & 0xff;
+    for (let i = 3; i < source.length; i += 4) source[i] = 255;
+    ctx.putImageData(new ImageData(source, size, size), 0, 0);
+    const read = ctx.getImageData(0, 0, size, size).data;
+    for (let i = 0; i < source.length; i++) {
+      if (read[i] !== source[i]) return false;
+    }
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+let canvasStable = true;
+
+function ensureCanvasStable() {
+  canvasStable = canvasPixelsAreStable();
+  $("pixel-warning").hidden = canvasStable;
+  if (!canvasStable) {
+    showToast(
+      "Browser mengacak piksel canvas. Matikan Shields untuk situs ini, lalu muat ulang halaman.",
+      "error",
+      8000
+    );
+  }
+  return canvasStable;
+}
+
 /* ---------------- Init ---------------- */
 
 function init() {
   initTheme();
   setupPwToggles();
   requestPersistentStorage();
+  canvasStable = canvasPixelsAreStable();
+  $("pixel-warning").hidden = canvasStable;
 
   for (const tab of document.querySelectorAll(".tab")) {
     tab.addEventListener("click", () => switchView(tab.dataset.view));
@@ -1038,6 +1190,14 @@ function init() {
   });
   $("btn-decrypt").addEventListener("click", doDecrypt);
   $("btn-copy-message").addEventListener("click", () => copyText($("open-message").textContent));
+  $("btn-reuse").addEventListener("click", handleReuseImage);
+  $("btn-reuse-preview").addEventListener("click", handleReuseImage);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("cleanse-overlay").hidden) {
+      $("cleanse-overlay").hidden = true;
+      document.body.classList.remove("cleansing");
+    }
+  });
   $("btn-close-result").addEventListener("click", () => {
     $("open-result").hidden = true;
   });

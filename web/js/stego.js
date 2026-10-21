@@ -827,3 +827,65 @@ export function imageDataToPngBlob(imageData) {
     }, "image/png");
   });
 }
+
+/* ---------------- Pembersihan gambar untuk dipakai ulang ---------------- */
+
+const RANDOM_CHUNK_WORDS = 16384; // 65.536 byte per panggilan getRandomValues
+
+function fillRandomWords(words) {
+  for (let offset = 0; offset < words.length; offset += RANDOM_CHUNK_WORDS) {
+    const end = Math.min(offset + RANDOM_CHUNK_WORDS, words.length);
+    crypto.getRandomValues(words.subarray(offset, end));
+  }
+}
+
+/**
+ * Hancurkan payload lama dengan menimpa seluruh LSB R/G/B memakai bit acak.
+ * Selisih visual maksimal 1 per channel dan alpha dipaksa 255 (putih).
+ */
+export function sanitizeImageData(imageData) {
+  const width = imageData.width;
+  const height = imageData.height;
+  const data = new Uint8ClampedArray(imageData.data);
+  const pixels = width * height;
+  const words = new Uint32Array(Math.ceil((pixels * 3) / 32));
+  fillRandomWords(words);
+
+  let bitIndex = 0;
+  for (let p = 0; p < pixels; p++) {
+    const base = p * 4;
+    for (let c = 0; c < 3; c++) {
+      const bit = (words[bitIndex >>> 5] >>> (bitIndex & 31)) & 1;
+      data[base + c] = (data[base + c] & 0xfe) | bit;
+      bitIndex++;
+    }
+    data[base + 3] = 255;
+  }
+  return new ImageData(data, width, height);
+}
+
+/**
+ * Sanitasi + encode + verifikasi. Payload lama harus benar-benar tidak terbaca
+ * sebelum blob dikembalikan. Diulang maksimal 3 kali.
+ */
+export async function sanitizeToPngBlob(imageData) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const clean = sanitizeImageData(imageData);
+    const blob = await imageDataToPngBlob(clean);
+
+    let leaked = false;
+    try {
+      const img = await loadImageFromFile(blob);
+      const reloaded = imageToImageData(img).imageData;
+      extractPayload(reloaded);
+      leaked = true;
+    } catch {
+      leaked = false;
+    }
+    if (!leaked) return blob;
+  }
+  throw new StegoError(
+    "CLEAN_FAILED",
+    "Gambar gagal dibersihkan sepenuhnya. Coba unggah ulang gambar aslinya."
+  );
+}
