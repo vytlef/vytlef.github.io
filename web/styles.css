@@ -401,6 +401,50 @@ button { font: inherit; color: inherit; cursor: pointer; }
   color: var(--text-muted);
 }
 
+/* ---------- Password strength & stealth meters ---------- */
+
+.pw-strength,
+.stealth-meter {
+  display: block;
+  margin-top: 8px;
+}
+
+.pw-strength-bar,
+.stealth-bar {
+  display: block;
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+  overflow: hidden;
+}
+
+.pw-strength-fill,
+.stealth-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: var(--danger);
+  transition: width .2s ease, background .2s ease;
+}
+
+.pw-strength-label,
+.stealth-label {
+  display: block;
+  margin-top: 4px;
+  font-size: .78rem;
+  color: var(--text-muted);
+}
+
+.pw-strength[data-level="weak"] .pw-strength-fill,
+.stealth-meter[data-level="high"] .stealth-fill { background: var(--danger); }
+.pw-strength[data-level="fair"] .pw-strength-fill,
+.stealth-meter[data-level="medium"] .stealth-fill { background: var(--warn); }
+.pw-strength[data-level="good"] .pw-strength-fill,
+.stealth-meter[data-level="low"] .stealth-fill { background: var(--ok); }
+
+.hint-visibility-warning { margin-top: 10px; }
+
 /* ---------- Buttons ---------- */
 
 .btn {
@@ -522,6 +566,38 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 
 .storage-head .field-label { margin: 0; }
+
+.memo-side { display: flex; flex-direction: column; gap: 18px; align-self: start; min-width: 0; }
+
+.vault-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.vault-desc { margin: 6px 0 0; font-size: .86rem; color: var(--text-muted); line-height: 1.5; }
+
+.vault-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.vault-form { margin-top: 12px; display: grid; gap: 8px; }
+
+.vault-form input {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.vault-form input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.vault-form-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.vault-form .field-hint { color: var(--danger); }
 
 .storage-bar {
   height: 10px;

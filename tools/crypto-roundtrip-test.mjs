@@ -54,6 +54,26 @@ async function makeV2(message, password, hint, cover = makeCover()) {
   return { image, parsed, keys, body, message, encrypted };
 }
 
+async function makeV3(message, password, hint, cover = makeCover(), kdf = undefined) {
+  const encrypted = await cryptoPic.encryptPayloadV3(password, message, hint, kdf);
+  const image = await stego.embedPayload(cover, encrypted.payload, encrypted.stegoKey);
+  const extractedPrefix = stego.extractPayload(image);
+  const parsed = cryptoPic.parsePayload(extractedPrefix);
+  const keys = await cryptoPic.deriveV2Keys(password, parsed.salt, parsed.kdf);
+  const body = await stego.extractProtectedBody(image, parsed, keys.stegoKey);
+  return { image, parsed, keys, body, message, encrypted, prefix: extractedPrefix };
+}
+
+function readSequentialSampleBytes(image, count) {
+  const out = new Uint8Array(count);
+  for (let i = 0; i < count * 8; i++) {
+    const sample = i;
+    const offset = Math.floor(sample / 3) * 4 + (sample % 3);
+    out[i >> 3] = (out[i >> 3] << 1) | (image.data[offset] & 1);
+  }
+  return out;
+}
+
 async function decryptV2(password, parsed, image, keys = null) {
   const activeKeys = keys || await cryptoPic.deriveV2Keys(password, parsed.salt, parsed.kdf);
   const body = await stego.extractProtectedBody(image, parsed, activeKeys.stegoKey);
@@ -232,6 +252,129 @@ await check("Capacity estimator accounts for V2 metadata, authentication tag and
   new DataView(overLimit.buffer).setUint32(0, overLimit.length, false);
   await assert.rejects(
     stego.embedPayload(makeCover(256, 256), overLimit, encoded.stegoKey),
+    (error) => error && error.code === "TOO_LARGE"
+  );
+});
+
+await check("V3 round trips repeated with header-stored KDF parameters", async () => {
+  const cases = [
+    { password: "Pohon Kuat-2026!", message: "Pesan rahasia V3 dengan tanda baca.", hint: "nama tempat" },
+    { password: "CaseSensitive-AA", message: "Huruf besar dan kecil dipertahankan.", hint: "" },
+    { password: "cafe\u0301-unicode", typed: "café-unicode", message: "Unicode NFC dan emoji 🔐🌿", hint: "petunjuk ü" },
+    { password: "empat kata acak 2026", message: "Baris pertama\nBaris kedua\nBaris ketiga.", hint: "uji multi-baris" },
+  ];
+  const nonces = new Set();
+  for (let round = 0; round < 4; round++) {
+    for (const item of cases) {
+      const result = await makeV3(item.message, item.password, item.hint);
+      assert.equal(result.parsed.version, 3);
+      assert.equal(result.parsed.hint, item.hint);
+      assert.ok(result.parsed.kdf.memorySize >= 8 && result.parsed.kdf.iterations >= 1);
+      assert.equal(
+        await cryptoPic.decryptPayload(item.typed || item.password, result.parsed, result.body, result.keys),
+        item.message
+      );
+      nonces.add(Buffer.from(result.parsed.nonce).toString("hex"));
+    }
+  }
+  assert.equal(nonces.size, 16, "Each V3 encryption must use a fresh nonce.");
+});
+
+await check("V3 stores custom KDF parameters in the header and honours them", async () => {
+  const kdf = { memorySize: 1024, iterations: 1, parallelism: 1 };
+  const result = await makeV3("Parameter KDF kustom.", "Sandi KDF kustom 2026", "kdf", makeCover(192, 192), kdf);
+  assert.deepEqual(result.parsed.kdf, kdf);
+  assert.equal(await cryptoPic.decryptPayload("Sandi KDF kustom 2026", result.parsed, result.body, result.keys), "Parameter KDF kustom.");
+});
+
+await check("V3 header is not a sequential plaintext block at the start of the image", async () => {
+  const result = await makeV3("Header harus tersebar.", "Sandi header tersebar", "petunjuk rahasia");
+  const firstFive = readSequentialSampleBytes(result.image, 5);
+  // Bootstrap acak; sangat tidak mungkin kebetulan sama dengan magic+versi.
+  assert.notDeepEqual(Array.from(firstFive), [0x43, 0x50, 0x49, 0x43, 3]);
+  // Namun pembaca tetap menemukan header dan petunjuknya.
+  assert.equal(result.parsed.hint, "petunjuk rahasia");
+});
+
+await check("V3 matrix embedding changes fewer samples than raw LSB for the same payload", async () => {
+  const cover = makeCover(512, 512);
+  const message = "x".repeat(1200);
+  const encrypted = await cryptoPic.encryptPayloadV3("Sandi matrix embedding 2026", message, "");
+  const image = await stego.embedPayload(cover, encrypted.payload, encrypted.stegoKey);
+
+  let changed = 0;
+  for (let sample = 0; sample < cover.width * cover.height * 3; sample++) {
+    const offset = Math.floor(sample / 3) * 4 + (sample % 3);
+    if ((cover.data[offset] & 1) !== (image.data[offset] & 1)) changed++;
+  }
+  const bodyBits = (encrypted.payload.length - 53) * 8;
+  assert.ok(changed < bodyBits * 0.7, `changed=${changed} bodyBits=${bodyBits}`);
+});
+
+await check("V3 survives a flat (texture-less) cover by lowering the adaptive threshold", async () => {
+  const width = 240;
+  const height = 240;
+  const flat = new Uint8ClampedArray(width * height * 4);
+  for (let i = 0; i < flat.length; i += 4) {
+    flat[i] = 128;
+    flat[i + 1] = 128;
+    flat[i + 2] = 128;
+    flat[i + 3] = 255;
+  }
+  const cover = { width, height, data: flat };
+  const result = await makeV3("Pesan pada gambar datar.", "Sandi gambar datar 2026", "", cover);
+  assert.equal(await cryptoPic.decryptPayload("Sandi gambar datar 2026", result.parsed, result.body, result.keys), "Pesan pada gambar datar.");
+});
+
+async function attemptV3Open(image, password) {
+  const prefix = stego.extractPayload(image);
+  const parsed = cryptoPic.parsePayload(prefix);
+  const keys = await cryptoPic.deriveV2Keys(password, parsed.salt, parsed.kdf);
+  const body = await stego.extractProtectedBody(image, parsed, keys.stegoKey);
+  return cryptoPic.decryptPayload(password, parsed, body, keys);
+}
+
+await check("V3 rejects tampered bootstrap and body pixels", async () => {
+  const password = "Sandi anti-ubah 2026";
+  const result = await makeV3("Pesan yang akan dirusak.", password, "tamper");
+  const totalSamples = result.image.width * result.image.height * 3;
+
+  // Bootstrap (nonce) tamper.
+  const bootstrapDamaged = new ImageData(
+    new Uint8ClampedArray(result.image.data),
+    result.image.width,
+    result.image.height
+  );
+  bootstrapDamaged.data[0] ^= 1;
+  await assert.rejects(attemptV3Open(bootstrapDamaged, password), (error) => {
+    return error && (error.code === "WRONG_PASSWORD" || error.code === "CORRUPT" || error.code === "BAD_VERSION" || error.code === "NOT_CRYPTOPIC");
+  });
+
+  // Body tamper: alter the extracted ciphertext (deterministic) and ensure GCM rejects it.
+  const prefix = stego.extractPayload(result.image);
+  const parsed = cryptoPic.parsePayload(prefix);
+  const keys = await cryptoPic.deriveV2Keys(password, parsed.salt, parsed.kdf);
+  const body = await stego.extractProtectedBody(result.image, parsed, keys.stegoKey);
+  const tampered = new Uint8Array(body);
+  tampered[0] ^= 1;
+  await assert.rejects(cryptoPic.decryptPayload(password, parsed, tampered, keys), (error) => {
+    return error && (error.code === "WRONG_PASSWORD" || error.code === "CORRUPT");
+  });
+});
+
+await check("V3 capacity estimator is respected at and beyond the limit", async () => {
+  const width = 400;
+  const height = 400;
+  const capacity = stego.maxMessageBytesV3(width, height, "hint");
+  assert.ok(capacity > 0);
+
+  const atLimit = await cryptoPic.encryptPayloadV3("Sandi kapasitas V3 2026", "a".repeat(capacity), "hint");
+  const embedded = await stego.embedPayload(makeCover(width, height), atLimit.payload, atLimit.stegoKey);
+  assert.ok(embedded.data.length > 0, "Estimated V3 maximum should fit.");
+
+  const over = await cryptoPic.encryptPayloadV3("Sandi kapasitas V3 2026", "a".repeat(capacity + 64), "hint");
+  await assert.rejects(
+    stego.embedPayload(makeCover(width, height), over.payload, over.stegoKey),
     (error) => error && error.code === "TOO_LARGE"
   );
 });

@@ -11,6 +11,13 @@ const V2_HEADER_FIXED = 34;
 const TAG_LEN = 16;
 export const V2_KDF = Object.freeze({ memorySize: 65536, iterations: 3, parallelism: 4 });
 
+const VERSION_V3 = 3;
+const V3_SALT_LEN = 16;
+const V3_IV_LEN = 12;
+const V3_NONCE_LEN = 8;
+const V3_HEADER_FIXED = 53;
+export const V3_KDF = Object.freeze({ memorySize: 65536, iterations: 3, parallelism: 4 });
+
 const encoder = new TextEncoder();
 
 export class CryptoPicError extends Error {
@@ -161,6 +168,9 @@ export async function deriveV2Keys(password, salt, kdf = V2_KDF) {
   return { encryptionKey, stegoKey };
 }
 
+// Alias generik: parameter KDF kini dapat berasal dari header (V3).
+export const deriveKeys = deriveV2Keys;
+
 export function overheadBytes(hint) {
   const hintLen = hint ? toBytes(hint).length : 0;
   return V2_HEADER_FIXED + hintLen + TAG_LEN;
@@ -207,6 +217,52 @@ export async function encryptPayload(password, message, hint = "") {
 
 function hasV1Magic(payload) {
   return payload.length >= MAGIC.length && MAGIC.every((byte, index) => payload[index] === byte);
+}
+
+function makeV3Header({ total, salt, iv, nonce, hintBytes, kdf }) {
+  const prefix = new Uint8Array(V3_HEADER_FIXED + hintBytes.length);
+  const view = new DataView(prefix.buffer);
+  prefix.set(MAGIC, 0);
+  prefix[4] = VERSION_V3;
+  view.setUint32(5, total, false);
+  view.setUint32(9, kdf.memorySize, false);
+  prefix[13] = kdf.iterations;
+  prefix[14] = kdf.parallelism;
+  prefix.set(nonce, 15);
+  prefix.set(salt, 23);
+  prefix.set(iv, 39);
+  view.setUint16(51, hintBytes.length, false);
+  prefix.set(hintBytes, V3_HEADER_FIXED);
+  return prefix;
+}
+
+export async function encryptPayloadV3(password, message, hint = "", kdf = V3_KDF) {
+  const salt = crypto.getRandomValues(new Uint8Array(V3_SALT_LEN));
+  const iv = crypto.getRandomValues(new Uint8Array(V3_IV_LEN));
+  const nonce = crypto.getRandomValues(new Uint8Array(V3_NONCE_LEN));
+  const messageBytes = toBytes(message);
+  const hintBytes = hint ? toBytes(hint) : new Uint8Array(0);
+  if (hintBytes.length > 0xffff) {
+    throw new CryptoPicError("HINT_TOO_LONG", "Petunjuk terlalu panjang (maks 65.535 byte).");
+  }
+
+  const total = V3_HEADER_FIXED + hintBytes.length + messageBytes.length + TAG_LEN;
+  if (total > 0xffffffff) {
+    throw new CryptoPicError("MESSAGE_TOO_LARGE", "Pesan terlalu besar untuk format CryptoPic.");
+  }
+  const prefix = makeV3Header({ total, salt, iv, nonce, hintBytes, kdf });
+  const keys = await deriveKeys(password, salt, kdf);
+  const ciphertext = new Uint8Array(
+    await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv, additionalData: prefix, tagLength: 128 },
+      keys.encryptionKey,
+      messageBytes
+    )
+  );
+  const payload = new Uint8Array(prefix.length + ciphertext.length);
+  payload.set(prefix);
+  payload.set(ciphertext, prefix.length);
+  return { payload, stegoKey: keys.stegoKey };
 }
 
 function parseV1(payload) {
@@ -268,10 +324,58 @@ function parseV2(payload) {
   };
 }
 
+function parseV3(payload) {
+  if (payload.length < V3_HEADER_FIXED) {
+    throw new CryptoPicError("CORRUPT", "Header gambar CryptoPic V3 tidak lengkap.");
+  }
+  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  const total = view.getUint32(5, false);
+  const memorySize = view.getUint32(9, false);
+  const iterations = payload[13];
+  const parallelism = payload[14];
+  const hintLen = view.getUint16(51, false);
+  const prefixLength = V3_HEADER_FIXED + hintLen;
+
+  if (prefixLength > payload.length || prefixLength + TAG_LEN > total) {
+    throw new CryptoPicError("CORRUPT", "Header V3 terpotong atau panjang payload tidak konsisten.");
+  }
+  // Jangan percaya parameter KDF dari header: batasi agar gambar jahat tidak
+  // memaksa browser mengalokasikan memori raksasa atau menghitung terlalu lama.
+  if (
+    memorySize < 8 ||
+    memorySize > 1 << 20 ||
+    iterations < 1 ||
+    iterations > 64 ||
+    parallelism < 1 ||
+    parallelism > 16
+  ) {
+    throw new CryptoPicError("CORRUPT", "Parameter KDF pada gambar V3 tidak valid.");
+  }
+
+  let hint = "";
+  try {
+    hint = fromBytes(payload.slice(V3_HEADER_FIXED, prefixLength));
+  } catch {
+    throw new CryptoPicError("CORRUPT", "Petunjuk pada gambar V3 rusak.");
+  }
+  return {
+    version: VERSION_V3,
+    hint,
+    salt: payload.slice(23, 23 + V3_SALT_LEN),
+    iv: payload.slice(39, 39 + V3_IV_LEN),
+    nonce: payload.slice(15, 15 + V3_NONCE_LEN),
+    total,
+    prefixLength,
+    prefix: payload.slice(0, prefixLength),
+    kdf: { memorySize, iterations, parallelism },
+  };
+}
+
 export function parsePayload(payload) {
   if (hasV1Magic(payload)) {
     const version = payload[4];
     if (version === VERSION_V1) return parseV1(payload);
+    if (version === VERSION_V3) return parseV3(payload);
     throw new CryptoPicError("BAD_VERSION", `Versi payload bertanda tidak didukung (v${version}).`);
   }
   return parseV2(payload);

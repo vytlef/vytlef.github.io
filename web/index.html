@@ -56,7 +56,7 @@
     <section class="view active" id="view-hide" role="tabpanel" aria-labelledby="tab-hide">
       <div class="card hide-card">
         <h1 class="card-title hide-title">Sembunyikan Pesan-Mu</h1>
-        <p class="card-sub">V2 memakai <strong>AES-256-GCM + Argon2id</strong> dan menyebarkan data secara terarah di PNG. Semua proses berjalan di perangkat Anda.</p>
+        <p class="card-sub">V2.0,<strong> No Server No Database Just Run On your Device,</strong> We Respect Your Privacy </p>
 
         <div class="hide-layout">
           <div class="hide-column hide-image-column">
@@ -73,6 +73,9 @@
                 <span id="hide-file-name"></span>
                 <span id="hide-file-dims"></span>
                 <span class="capacity-badge" id="hide-capacity"></span>
+              </div>
+              <div class="callout callout-warn" id="transparency-notice" hidden>
+                Gambar ini memiliki area transparan. Agar pesan tidak rusak, area transparan akan diratakan ke warna putih pada hasil.
               </div>
               <button class="btn btn-ghost btn-sm" id="hide-replace" type="button">Ganti gambar</button>
             </div>
@@ -95,6 +98,10 @@
               <span class="field-label">Pesan Rahasia</span>
               <textarea id="secret-text" rows="5" placeholder="Tulis pesan yang ingin disembunyikan…" spellcheck="false"></textarea>
               <span class="field-foot"><span id="secret-counter">0 B</span><span id="secret-cap-info"></span></span>
+              <span class="stealth-meter" id="stealth-meter" hidden>
+                <span class="stealth-bar"><span class="stealth-fill" id="stealth-fill"></span></span>
+                <span class="stealth-label" id="stealth-label"></span>
+              </span>
             </label>
             <a class="btn btn-primary btn-block hide-download" id="btn-download" download href="#" hidden>
               <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 4v11m0 0l-4-4m4 4l4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 19h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
@@ -112,7 +119,15 @@
                 </button>
               </span>
               <span class="field-hint">Disarankan gunakan 4 kata acak atau lebih. Huruf besar/kecil dibedakan.</span>
+              <span class="pw-strength" id="pw-strength" hidden>
+                <span class="pw-strength-bar"><span class="pw-strength-fill" id="pw-strength-fill"></span></span>
+                <span class="pw-strength-label" id="pw-strength-label"></span>
+              </span>
             </label>
+
+            <div class="callout callout-warn hint-visibility-warning" id="hint-visibility-warning" hidden>
+              <strong>Petunjuk terlihat publik:</strong> siapa pun yang memiliki gambar ini bisa membaca petunjuk tanpa kata sandi. Jangan tulis informasi rahasia di petunjuk.
+            </div>
 
             <label class="field">
               <span class="field-label">Petunjuk <span class="optional-tag">opsional</span></span>
@@ -208,10 +223,32 @@
     <section class="view" id="view-memo" role="tabpanel" aria-labelledby="tab-memo" hidden>
       <h1 class="card-title memo-title">Memo</h1>
       <div class="memo-layout">
+        <div class="memo-side">
+        <div class="card vault-card">
+          <div class="vault-head">
+            <div>
+              <span class="field-label">Keamanan Memo</span>
+              <p class="vault-desc" id="vault-desc"></p>
+            </div>
+            <div class="vault-actions">
+              <button class="btn btn-ghost btn-sm" id="btn-vault-primary" type="button">Aktifkan PIN</button>
+              <button class="btn btn-ghost btn-sm" id="btn-vault-disable" type="button" hidden>Matikan PIN</button>
+            </div>
+          </div>
+          <div class="vault-form" id="vault-form" hidden>
+            <input type="password" id="vault-pin" class="input" autocomplete="new-password" placeholder="PIN memo (min. 6 karakter)">
+            <input type="password" id="vault-pin-confirm" class="input" autocomplete="new-password" placeholder="Ulangi PIN">
+            <div class="vault-form-actions">
+              <button class="btn btn-primary btn-sm" id="btn-vault-submit" type="button">Simpan</button>
+              <button class="btn btn-ghost btn-sm" id="btn-vault-cancel" type="button">Batal</button>
+            </div>
+            <p class="field-hint" id="vault-error" hidden></p>
+          </div>
+        </div>
         <div class="card storage-card">
           <div class="storage-head">
             <span class="field-label">Penyimpanan Memo</span>
-            <span id="storage-text">Terpakai 0 KB dari 2 MB</span>
+            <span id="storage-text">Terpakai 0 KB dari 200 MB</span>
           </div>
           <div class="storage-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="storage-progress">
             <div class="storage-fill" id="storage-fill"></div>
@@ -220,6 +257,7 @@
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 4l9 16H3l9-16z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4M12 17v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
             <span id="storage-warning-text"></span>
           </div>
+        </div>
         </div>
 
         <div class="card list-card">

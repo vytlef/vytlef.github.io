@@ -1,5 +1,5 @@
 import {
-  encryptPayload,
+  encryptPayloadV3,
   parsePayload,
   decryptPayload,
   deriveV2Keys,
@@ -7,10 +7,12 @@ import {
 } from "./crypto.js";
 import {
   validatePNGFile,
+  validatePNGStructure,
+  readFileBytes,
   pngRejectMessage,
   loadImageFromFile,
   imageToImageData,
-  maxMessageBytes,
+  maxMessageBytesV3,
   embedPayload,
   extractPayload,
   extractProtectedBody,
@@ -27,10 +29,68 @@ import {
   initStorage,
   formatBytes,
   MAX_BYTES,
+  vaultEnabled,
+  isUnlocked,
+  enableMemoPin,
+  unlockMemos,
+  lockMemos,
+  disableMemoPin,
+  MIN_PIN_LENGTH,
 } from "./memo.js";
 
 const $ = (id) => document.getElementById(id);
 const encoder = new TextEncoder();
+
+/* ---------------- Verifikasi hasil embed ---------------- */
+
+function bytesEqual(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * Self-check: baca ulang PNG hasil, ekstrak payload, dan bandingkan dengan
+ * payload semula sebelum file ditawarkan untuk diunduh.
+ */
+async function verifyEmbedding(blob, expectedPayload, stegoKey) {
+  let imageData;
+  try {
+    const img = await loadImageFromFile(blob);
+    imageData = imageToImageData(img).imageData;
+  } catch {
+    throw new StegoError("VERIFY_FAILED", "Gambar hasil tidak dapat dibaca ulang untuk diverifikasi.");
+  }
+  let extracted;
+  try {
+    const prefix = extractPayload(imageData);
+    const parsed = parsePayload(prefix);
+    if (parsed.version !== 1) {
+      // V2/V3: extractPayload hanya mengembalikan header; body diambil terpisah.
+      const body = await extractProtectedBody(imageData, parsed, stegoKey);
+      const full = new Uint8Array(prefix.length + body.length);
+      full.set(prefix);
+      full.set(body, prefix.length);
+      extracted = full;
+    } else {
+      extracted = prefix;
+    }
+  } catch (err) {
+    throw new StegoError(
+      "VERIFY_FAILED",
+      `Pesan tidak dapat diekstrak ulang dari gambar hasil (${err.message}).`
+    );
+  }
+  if (!bytesEqual(extracted, expectedPayload)) {
+    throw new StegoError(
+      "VERIFY_FAILED",
+      "Pesan pada gambar hasil tidak sama dengan pesan asli. File tidak diunduh."
+    );
+  }
+  return true;
+}
 
 /* ---------------- Toast ---------------- */
 
@@ -149,12 +209,89 @@ function setupPwToggles() {
 
 /* ---------------- Alur: Sembunyikan ---------------- */
 
-const hideState = { img: null, width: 0, height: 0, fileName: "", stegoUrl: null };
+const hideState = { img: null, width: 0, height: 0, fileName: "", stegoUrl: null, hasTransparency: false };
 
 function hideAvailable() {
   if (!hideState.img) return 0;
   const hint = $("hide-hint").value.trim();
-  return maxMessageBytes(hideState.width, hideState.height, hint);
+  return maxMessageBytesV3(hideState.width, hideState.height, hint);
+}
+
+/* ---------------- Kekuatan sandi & meter stealth ---------------- */
+
+function estimatePasswordStrength(password) {
+  if (!password) return { score: 0, level: "weak", label: "" };
+  let score = Math.min(50, password.length * 4);
+  if (/[a-z]/.test(password)) score += 5;
+  if (/[A-Z]/.test(password)) score += 5;
+  if (/[0-9]/.test(password)) score += 5;
+  if (/[^A-Za-z0-9]/.test(password)) score += 10;
+  if (password.length >= 16) score += 10;
+  if (password.length >= 24) score += 10;
+  if (/^(.)\1+$/.test(password)) score -= 40;
+  if (/^(123456|12345678|password|qwerty|admin|sandi|rahasia|iloveyou)/i.test(password)) score -= 40;
+  if (password.length < 8) score = Math.min(score, 25);
+  score = Math.max(0, Math.min(100, score));
+
+  let level = "weak";
+  if (score >= 70) level = "good";
+  else if (score >= 40) level = "fair";
+
+  let label;
+  if (password.length < 8) {
+    label = "Terlalu pendek — minimal 8 karakter (disarankan 12+ atau 4 kata acak).";
+    level = "weak";
+  } else if (level === "good") {
+    label = "Kuat.";
+  } else if (level === "fair") {
+    label = "Cukup — pertimbangkan frasa yang lebih panjang.";
+  } else {
+    label = "Lemah — tambah panjang atau variasikan karakter.";
+  }
+  return { score, level, label };
+}
+
+function updatePasswordStrength() {
+  const password = $("hide-password").value;
+  const wrap = $("pw-strength");
+  const fill = $("pw-strength-fill");
+  const label = $("pw-strength-label");
+  if (!password) {
+    wrap.hidden = true;
+    return;
+  }
+  const { score, level, label: text } = estimatePasswordStrength(password);
+  wrap.hidden = false;
+  wrap.dataset.level = level;
+  fill.style.width = `${Math.max(6, score)}%`;
+  label.textContent = text;
+}
+
+function updateStealthMeter(bytes, avail) {
+  const meter = $("stealth-meter");
+  const fill = $("stealth-fill");
+  const label = $("stealth-label");
+  if (!hideState.img || avail <= 0) {
+    meter.hidden = true;
+    return;
+  }
+  const ratio = Math.min(1, bytes / avail);
+  const percent = ratio * 100;
+  let level, text;
+  if (ratio <= 0.1) {
+    level = "low";
+    text = "Risiko deteksi: rendah (pemakaian kapasitas kecil).";
+  } else if (ratio <= 0.3) {
+    level = "medium";
+    text = "Risiko deteksi: sedang. Semakin besar pesan, semakin mudah dianalisis.";
+  } else {
+    level = "high";
+    text = "Risiko deteksi: tinggi. Pesan besar lebih mudah terdeteksi steganalisis; gunakan gambar lebih besar atau pesan lebih pendek.";
+  }
+  meter.hidden = false;
+  meter.dataset.level = level;
+  fill.style.width = `${Math.max(4, percent)}%`;
+  label.textContent = text;
 }
 
 function updateHideUi() {
@@ -176,8 +313,13 @@ function updateHideUi() {
     $("secret-cap-info").textContent = hideState.img ? `${formatBytes(avail)} tersedia` : "";
   }
 
+  updateStealthMeter(bytes, avail);
+  updatePasswordStrength();
+  $("hint-visibility-warning").hidden = !$("hide-hint").value.trim();
+
+  const password = $("hide-password").value;
   const canEncrypt =
-    !!hideState.img && secret.trim().length > 0 && $("hide-password").value.length > 0 && bytes <= avail;
+    !!hideState.img && secret.trim().length > 0 && password.length >= 8 && bytes <= avail;
   $("btn-encrypt").disabled = !canEncrypt;
 }
 
@@ -187,15 +329,21 @@ async function handleHideFile(file) {
     return;
   }
   try {
+    const bytes = await readFileBytes(file);
+    validatePNGStructure(bytes);
     const img = await loadImageFromFile(file);
+    const { imageData, hasTransparency } = imageToImageData(img);
     hideState.img = img;
+    hideState.imageData = imageData;
+    hideState.hasTransparency = hasTransparency;
     hideState.width = img.naturalWidth;
     hideState.height = img.naturalHeight;
     hideState.fileName = file.name;
     $("hide-preview-img").src = URL.createObjectURL(file);
     $("hide-file-name").textContent = file.name;
     $("hide-file-dims").textContent = `${img.naturalWidth}×${img.naturalHeight}px`;
-    $("hide-capacity").textContent = `Kapasitas pesan maks. ${formatBytes(maxMessageBytes(img.naturalWidth, img.naturalHeight, $("hide-hint").value.trim()))}`;
+    $("hide-capacity").textContent = `Kapasitas pesan maks. ${formatBytes(maxMessageBytesV3(img.naturalWidth, img.naturalHeight, $("hide-hint").value.trim()))}`;
+    $("transparency-notice").hidden = !hasTransparency;
     $("hide-drop").hidden = true;
     $("hide-preview-wrap").hidden = false;
     $("hide-result").hidden = true;
@@ -208,11 +356,14 @@ async function handleHideFile(file) {
 
 function resetHideImage() {
   hideState.img = null;
+  hideState.imageData = null;
   hideState.fileName = "";
+  hideState.hasTransparency = false;
   $("hide-drop").hidden = false;
   $("hide-preview-wrap").hidden = true;
   $("hide-result").hidden = true;
   $("btn-download").hidden = true;
+  $("transparency-notice").hidden = true;
   updateHideUi();
 }
 
@@ -230,11 +381,13 @@ async function doEncrypt() {
   $("btn-encrypt").disabled = true;
 
   try {
-    const img = hideState.img;
-    const { imageData } = imageToImageData(img);
-    const { payload, stegoKey } = await encryptPayload(password, secret, hint);
+    const imageData = hideState.imageData || imageToImageData(hideState.img).imageData;
+    const { payload, stegoKey } = await encryptPayloadV3(password, secret, hint);
     const embedded = await embedPayload(imageData, payload, stegoKey);
     const blob = await imageDataToPngBlob(embedded);
+
+    status.innerHTML = '<span class="spinner"></span> Memverifikasi hasil…';
+    await verifyEmbedding(blob, payload, stegoKey);
 
     if (hideState.stegoUrl) URL.revokeObjectURL(hideState.stegoUrl);
     hideState.stegoUrl = URL.createObjectURL(blob);
@@ -250,7 +403,12 @@ async function doEncrypt() {
     $("hide-preview-wrap").hidden = true;
     link.hidden = false;
     status.hidden = true;
-    showToast("Pesan berhasil disembunyikan. Unduh gambar PNG-nya.", "ok");
+    $("hide-password").value = "";
+    if (hideState.hasTransparency) {
+      showToast("Pesan berhasil disembunyikan. Area transparan diratakan ke putih pada hasil.", "ok", 5000);
+    } else {
+      showToast("Pesan berhasil disembunyikan. Unduh gambar PNG-nya.", "ok");
+    }
   } catch (err) {
     status.textContent = err.message;
     status.classList.add("error");
@@ -296,6 +454,8 @@ async function handleOpenFile(file) {
   status.innerHTML = '<span class="spinner"></span> Membaca piksel gambar…';
 
   try {
+    const bytes = await readFileBytes(file);
+    validatePNGStructure(bytes);
     const img = await loadImageFromFile(file);
     const { imageData } = imageToImageData(img);
     const payload = extractPayload(imageData);
@@ -317,7 +477,9 @@ async function handleOpenFile(file) {
     }
     $("open-password-hint").textContent = parsed.version === 1
       ? "Gambar V1: huruf besar/kecil tidak dibedakan."
-      : "Gambar V2: huruf besar/kecil dibedakan; bentuk Unicode dinormalisasi.";
+      : parsed.version === 3
+        ? "Gambar V3: huruf besar/kecil dibedakan; bentuk Unicode dinormalisasi."
+        : "Gambar V2: huruf besar/kecil dibedakan; bentuk Unicode dinormalisasi.";
     $("open-password-field").hidden = false;
     status.hidden = true;
     $("open-password").focus();
@@ -366,6 +528,7 @@ async function doDecrypt() {
     $("open-result").hidden = false;
     $("open-result-placeholder").hidden = true;
     status.hidden = true;
+    $("open-password").value = "";
 
     autoSaveMemo(message);
   } catch (err) {
@@ -397,6 +560,12 @@ async function autoSaveMemo(message) {
     } else {
       showToast("Pesan berhasil dibuka & tersimpan ke Memo.", "ok");
     }
+  } else if (result.reason === "LOCKED") {
+    showToast(
+      "Pesan dibuka, tetapi Memo sedang terkunci sehingga tidak tersimpan otomatis. Buka kunci Memo di tab Memo untuk menyimpannya.",
+      "warn",
+      6000
+    );
   } else if (result.reason === "FULL" || result.reason === "QUOTA") {
     showToast(
       "Penyimpanan memo penuh — pesan tidak tersimpan otomatis. Hapus memo lama di tab Memo; pesan tetap tampil di layar.",
@@ -476,6 +645,10 @@ function refreshMemoView() {
     }
   }
 
+  const locked = vaultEnabled() && !isUnlocked();
+  $("toolbar-normal").hidden = locked || selectMode;
+  $("toolbar-select").hidden = locked || !selectMode;
+  refreshVaultUi();
   renderMemoList();
   updateMemoBadge();
 }
@@ -487,7 +660,23 @@ function renderMemoList() {
   const list = $("memo-list");
   const empty = $("memo-empty");
   list.textContent = "";
+
+  if (vaultEnabled() && !isUnlocked()) {
+    $("memo-count").textContent = "";
+    list.hidden = true;
+    empty.hidden = false;
+    const line = empty.querySelector("p");
+    if (line) {
+      line.textContent = "Memo terkunci dan terenkripsi. Buka kunci dengan PIN untuk melihat memo tersimpan.";
+    }
+    return;
+  }
+
   const memos = listMemos();
+  const line = empty.querySelector("p");
+  if (line) {
+    line.textContent = "Belum ada memo. Memo otomatis tersimpan setiap kali Anda berhasil membuka pesan.";
+  }
 
   $("memo-count").textContent = memos.length > 0 ? `(${memos.length})` : "";
   empty.hidden = memos.length > 0;
@@ -657,6 +846,170 @@ function updateDeleteSelectedButton() {
   $("btn-delete-selected").textContent = checkedCount > 0 ? `Hapus (${checkedCount})` : "Hapus";
 }
 
+/* ---------------- Memo vault (PIN) ---------------- */
+
+let vaultMode = null;
+let vaultError = "";
+
+function vaultErrorMessage(reason) {
+  switch (reason) {
+    case "WEAK":
+      return `PIN minimal ${MIN_PIN_LENGTH} karakter.`;
+    case "ALREADY":
+      return "PIN sudah aktif.";
+    case "LOCKED":
+      return "Memo sedang terkunci.";
+    case "QUOTA":
+      return "Gagal menyimpan karena penyimpanan penuh.";
+    case "UNAVAILABLE":
+      return "Penyimpanan tidak tersedia.";
+    default:
+      return "Terjadi kesalahan.";
+  }
+}
+
+function refreshVaultUi() {
+  const desc = $("vault-desc");
+  if (!desc) return;
+  const primary = $("btn-vault-primary");
+  const disable = $("btn-vault-disable");
+  const form = $("vault-form");
+  const pin = $("vault-pin");
+  const confirmPin = $("vault-pin-confirm");
+  const submit = $("btn-vault-submit");
+  const errorEl = $("vault-error");
+
+  errorEl.hidden = !vaultError;
+  errorEl.textContent = vaultError;
+
+  if (!storageAvailable()) {
+    desc.textContent = "Penyimpanan memo tidak tersedia di browser ini.";
+    primary.hidden = true;
+    disable.hidden = true;
+    form.hidden = true;
+    return;
+  }
+
+  if (vaultEnabled() && !isUnlocked()) {
+    desc.textContent = "Memo dienkripsi dengan PIN dan sedang terkunci. Masukkan PIN untuk membuka.";
+    primary.textContent = "Buka Kunci";
+    primary.hidden = vaultMode === "unlock";
+    disable.hidden = true;
+    if (vaultMode === "unlock") {
+      form.hidden = false;
+      confirmPin.hidden = true;
+      submit.textContent = "Buka Kunci";
+      pin.placeholder = "PIN memo";
+      pin.autocomplete = "current-password";
+    } else {
+      form.hidden = true;
+    }
+    return;
+  }
+
+  if (vaultEnabled() && isUnlocked()) {
+    desc.textContent = "Memo dienkripsi dengan PIN (terbuka). Kunci kembali saat selesai memakainya.";
+    primary.textContent = "Kunci Sekarang";
+    primary.hidden = false;
+    disable.hidden = false;
+    form.hidden = true;
+    return;
+  }
+
+  desc.textContent = "Memo disimpan sebagai teks biasa di browser ini. Aktifkan PIN untuk mengenkripsinya saat disimpan.";
+  primary.textContent = "Aktifkan PIN";
+  primary.hidden = vaultMode === "enable";
+  disable.hidden = true;
+  if (vaultMode === "enable") {
+    form.hidden = false;
+    confirmPin.hidden = false;
+    submit.textContent = "Aktifkan";
+    pin.placeholder = `PIN memo (min. ${MIN_PIN_LENGTH} karakter)`;
+    pin.autocomplete = "new-password";
+  } else {
+    form.hidden = true;
+  }
+}
+
+function resetVaultForm() {
+  vaultMode = null;
+  vaultError = "";
+  $("vault-pin").value = "";
+  $("vault-pin-confirm").value = "";
+  refreshVaultUi();
+}
+
+function handleVaultPrimary() {
+  if (vaultEnabled() && isUnlocked()) {
+    lockMemos();
+    vaultMode = null;
+    vaultError = "";
+    refreshMemoView();
+    showToast("Memo dikunci.", "ok", 2500);
+    return;
+  }
+  vaultMode = vaultEnabled() ? "unlock" : "enable";
+  vaultError = "";
+  refreshVaultUi();
+  setTimeout(() => $("vault-pin").focus(), 0);
+}
+
+async function handleVaultSubmit() {
+  const pin = $("vault-pin").value;
+  vaultError = "";
+
+  if (vaultMode === "enable") {
+    if (pin.length < MIN_PIN_LENGTH) {
+      vaultError = `PIN minimal ${MIN_PIN_LENGTH} karakter.`;
+      refreshVaultUi();
+      return;
+    }
+    if (pin !== $("vault-pin-confirm").value) {
+      vaultError = "PIN dan ulangan PIN tidak sama.";
+      refreshVaultUi();
+      return;
+    }
+    const result = await enableMemoPin(pin);
+    if (!result.ok) {
+      vaultError = vaultErrorMessage(result.reason);
+      refreshVaultUi();
+      return;
+    }
+    $("vault-pin").value = "";
+    $("vault-pin-confirm").value = "";
+    vaultMode = null;
+    refreshMemoView();
+    showToast("PIN aktif. Memo baru akan dienkripsi.", "ok", 4000);
+    return;
+  }
+
+  if (vaultMode === "unlock") {
+    const result = await unlockMemos(pin);
+    if (!result.ok) {
+      vaultError = "PIN salah.";
+      refreshVaultUi();
+      return;
+    }
+    $("vault-pin").value = "";
+    vaultMode = null;
+    refreshMemoView();
+    showToast("Memo terbuka.", "ok", 2500);
+  }
+}
+
+async function handleVaultDisable() {
+  if (!confirm("Matikan PIN dan simpan memo sebagai teks biasa? Tindakan ini mengurangi keamanan.")) {
+    return;
+  }
+  const result = await disableMemoPin();
+  if (!result.ok) {
+    showToast(vaultErrorMessage(result.reason), "error", 5000);
+    return;
+  }
+  refreshMemoView();
+  showToast("PIN dimatikan. Memo kembali tersimpan sebagai teks biasa.", "warn", 5000);
+}
+
 /* ---------------- Init ---------------- */
 
 function init() {
@@ -709,6 +1062,17 @@ function init() {
     }
   });
 
+  $("btn-vault-primary").addEventListener("click", handleVaultPrimary);
+  $("btn-vault-disable").addEventListener("click", handleVaultDisable);
+  $("btn-vault-submit").addEventListener("click", handleVaultSubmit);
+  $("btn-vault-cancel").addEventListener("click", resetVaultForm);
+  $("vault-pin").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") handleVaultSubmit();
+  });
+  $("vault-pin-confirm").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") handleVaultSubmit();
+  });
+
   updateHideUi();
 
   if ("serviceWorker" in navigator) {
@@ -721,6 +1085,7 @@ function init() {
 
   initStorage().then(() => {
     updateMemoBadge();
+    refreshVaultUi();
     if (document.getElementById("view-memo").classList.contains("active")) refreshMemoView();
   });
 }
