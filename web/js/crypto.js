@@ -1,22 +1,12 @@
 const MAGIC = new Uint8Array([0x43, 0x50, 0x49, 0x43]);
-const VERSION_V1 = 1;
-const VERSION_V2 = 2;
-const FLAG_HINT = 1 << 0;
-const V1_SALT_LEN = 16;
-const V1_IV_LEN = 12;
-const V1_HEADER_FIXED = 40;
-const V2_SALT_LEN = 16;
-const V2_IV_LEN = 12;
-const V2_HEADER_FIXED = 34;
+const VERSION = 4;
+const SALT_LEN = 16;
+const IV_LEN = 12;
+const NONCE_LEN = 8;
+const HEADER_FIXED = 53;
 const TAG_LEN = 16;
-export const V2_KDF = Object.freeze({ memorySize: 65536, iterations: 3, parallelism: 4 });
 
-const VERSION_V3 = 3;
-const V3_SALT_LEN = 16;
-const V3_IV_LEN = 12;
-const V3_NONCE_LEN = 8;
-const V3_HEADER_FIXED = 53;
-export const V3_KDF = Object.freeze({ memorySize: 65536, iterations: 3, parallelism: 4 });
+export const KDF = Object.freeze({ memorySize: 65536, iterations: 3, parallelism: 4 });
 
 /**
  * Batas parameter KDF yang boleh diterima dari header gambar.
@@ -28,7 +18,7 @@ export const KDF_LIMITS = Object.freeze({
   memoryMax: 256 * 1024, // KiB → 256 MiB
   iterationsMax: 8,
   parallelismMax: 8,
-  workMax: 512 * 1024, // KiB·iterasi → 512 MiB·iter
+  workMax: 512 * 1024, // KiB·iter
 });
 
 export function isKdfAcceptable(kdf) {
@@ -58,12 +48,21 @@ export class CryptoPicError extends Error {
   }
 }
 
-function normalizeV1Password(password) {
-  return password.toLowerCase();
+/**
+ * Sandi gambar V4 tidak peka huruf besar/kecil. Normalisasi dilakukan sebelum
+ * KDF agar "Rahasia", "rahasia", dan "RAHASIA" menghasilkan kunci yang sama.
+ */
+function normalizePassword(password) {
+  return password.normalize("NFC").toLowerCase().normalize("NFC");
 }
 
-function normalizeV2Password(password) {
-  return password.normalize("NFC");
+/**
+ * PIN vault Memo sengaja memakai normalisasi lama (NFC saja). Jangan diubah:
+ * vault Argon2id yang sudah ada diturunkan dari bentuk ini, dan vault PBKDF2
+ * lama harus tetap bisa dibuka lalu dimigrasikan.
+ */
+function normalizePin(pin) {
+  return pin.normalize("NFC");
 }
 
 function toBytes(text) {
@@ -144,35 +143,24 @@ function deriveArgon2Root(password, salt, kdf) {
   });
 }
 
-async function deriveV1Key(password, salt) {
-  const baseKey = await crypto.subtle.importKey(
-    "raw",
-    toBytes(normalizeV1Password(password)),
-    "PBKDF2",
-    false,
-    ["deriveKey"]
-  );
-  return crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt, iterations: 310000, hash: "SHA-256" },
-    baseKey,
-    { name: "AES-GCM", length: 256 },
-    false,
-    ["decrypt"]
-  );
-}
-
-export async function deriveV2Keys(password, salt, kdf = V2_KDF) {
-  const root = await deriveArgon2Root(toBytes(normalizeV2Password(password)), salt, kdf);
+/**
+ * Turunkan kunci enkripsi dan kunci posisi steganografi dari sandi gambar V4.
+ */
+export async function deriveKeys(password, salt, kdf = KDF) {
+  if (!isKdfAcceptable(kdf)) {
+    throw new CryptoPicError("KDF_INVALID", "Parameter KDF tidak wajar.");
+  }
+  const root = await deriveArgon2Root(toBytes(normalizePassword(password)), salt, kdf);
 
   const hkdfKey = await crypto.subtle.importKey("raw", root, "HKDF", false, ["deriveBits"]);
   const [encryptionMaterial, stegoMaterial] = await Promise.all([
     crypto.subtle.deriveBits(
-      { name: "HKDF", hash: "SHA-256", salt, info: toBytes("CryptoPic v2 encryption key") },
+      { name: "HKDF", hash: "SHA-256", salt, info: toBytes("CryptoPic v4 encryption key") },
       hkdfKey,
       256
     ),
     crypto.subtle.deriveBits(
-      { name: "HKDF", hash: "SHA-256", salt, info: toBytes("CryptoPic v2 stego position key") },
+      { name: "HKDF", hash: "SHA-256", salt, info: toBytes("CryptoPic v4 stego position key") },
       hkdfKey,
       256
     ),
@@ -198,73 +186,22 @@ export async function deriveV2Keys(password, salt, kdf = V2_KDF) {
   return { encryptionKey, stegoKey };
 }
 
-// Alias generik: parameter KDF kini dapat berasal dari header (V3).
-export const deriveKeys = deriveV2Keys;
-
 /**
- * Turunkan kunci mentah 32 byte memakai Argon2id.
- * Dipakai oleh vault Memo agar tidak bergantung pada PBKDF2 yang lebih lemah.
+ * Turunkan kunci mentah 32 byte untuk vault Memo.
+ * Memakai normalisasi PIN (NFC saja) agar vault lama tetap dapat dibuka.
  */
-export async function deriveArgon2KeyBytes(password, salt, kdf = V3_KDF) {
+export async function deriveArgon2KeyBytes(pin, salt, kdf = KDF) {
   if (!isKdfAcceptable(kdf)) {
     throw new CryptoPicError("KDF_INVALID", "Parameter KDF tidak wajar.");
   }
-  return deriveArgon2Root(toBytes(normalizeV2Password(password)), salt, kdf);
+  return deriveArgon2Root(toBytes(normalizePin(pin)), salt, kdf);
 }
 
-export function overheadBytes(hint) {
-  const hintLen = hint ? toBytes(hint).length : 0;
-  return V2_HEADER_FIXED + hintLen + TAG_LEN;
-}
-
-function makeV2Prefix({ total, salt, iv, hintBytes }) {
-  const prefix = new Uint8Array(V2_HEADER_FIXED + hintBytes.length);
-  const view = new DataView(prefix.buffer);
-  view.setUint32(0, total, false);
-  prefix.set(salt, 4);
-  prefix.set(iv, 20);
-  view.setUint16(32, hintBytes.length, false);
-  prefix.set(hintBytes, V2_HEADER_FIXED);
-  return prefix;
-}
-
-export async function encryptPayload(password, message, hint = "") {
-  const salt = crypto.getRandomValues(new Uint8Array(V2_SALT_LEN));
-  const iv = crypto.getRandomValues(new Uint8Array(V2_IV_LEN));
-  const messageBytes = toBytes(message);
-  const hintBytes = hint ? toBytes(hint) : new Uint8Array(0);
-  if (hintBytes.length > 0xffff) {
-    throw new CryptoPicError("HINT_TOO_LONG", "Petunjuk terlalu panjang (maks 65.535 byte).");
-  }
-
-  const total = V2_HEADER_FIXED + hintBytes.length + messageBytes.length + TAG_LEN;
-  if (total > 0xffffffff) {
-    throw new CryptoPicError("MESSAGE_TOO_LARGE", "Pesan terlalu besar untuk format CryptoPic.");
-  }
-  const prefix = makeV2Prefix({ total, salt, iv, hintBytes });
-  const keys = await deriveV2Keys(password, salt);
-  const ciphertext = new Uint8Array(
-    await crypto.subtle.encrypt(
-      { name: "AES-GCM", iv, additionalData: prefix, tagLength: 128 },
-      keys.encryptionKey,
-      messageBytes
-    )
-  );
-  const payload = new Uint8Array(prefix.length + ciphertext.length);
-  payload.set(prefix);
-  payload.set(ciphertext, prefix.length);
-  return { payload, stegoKey: keys.stegoKey };
-}
-
-function hasV1Magic(payload) {
-  return payload.length >= MAGIC.length && MAGIC.every((byte, index) => payload[index] === byte);
-}
-
-function makeV3Header({ total, salt, iv, nonce, hintBytes, kdf }) {
-  const prefix = new Uint8Array(V3_HEADER_FIXED + hintBytes.length);
+function makeHeader({ total, salt, iv, nonce, hintBytes, kdf }) {
+  const prefix = new Uint8Array(HEADER_FIXED + hintBytes.length);
   const view = new DataView(prefix.buffer);
   prefix.set(MAGIC, 0);
-  prefix[4] = VERSION_V3;
+  prefix[4] = VERSION;
   view.setUint32(5, total, false);
   view.setUint32(9, kdf.memorySize, false);
   prefix[13] = kdf.iterations;
@@ -273,25 +210,28 @@ function makeV3Header({ total, salt, iv, nonce, hintBytes, kdf }) {
   prefix.set(salt, 23);
   prefix.set(iv, 39);
   view.setUint16(51, hintBytes.length, false);
-  prefix.set(hintBytes, V3_HEADER_FIXED);
+  prefix.set(hintBytes, HEADER_FIXED);
   return prefix;
 }
 
-export async function encryptPayloadV3(password, message, hint = "", kdf = V3_KDF) {
-  const salt = crypto.getRandomValues(new Uint8Array(V3_SALT_LEN));
-  const iv = crypto.getRandomValues(new Uint8Array(V3_IV_LEN));
-  const nonce = crypto.getRandomValues(new Uint8Array(V3_NONCE_LEN));
+export async function encryptPayload(password, message, hint = "", kdf = KDF) {
+  if (!isKdfAcceptable(kdf)) {
+    throw new CryptoPicError("KDF_INVALID", "Parameter KDF tidak wajar.");
+  }
+  const salt = crypto.getRandomValues(new Uint8Array(SALT_LEN));
+  const iv = crypto.getRandomValues(new Uint8Array(IV_LEN));
+  const nonce = crypto.getRandomValues(new Uint8Array(NONCE_LEN));
   const messageBytes = toBytes(message);
   const hintBytes = hint ? toBytes(hint) : new Uint8Array(0);
   if (hintBytes.length > 0xffff) {
     throw new CryptoPicError("HINT_TOO_LONG", "Petunjuk terlalu panjang (maks 65.535 byte).");
   }
 
-  const total = V3_HEADER_FIXED + hintBytes.length + messageBytes.length + TAG_LEN;
+  const total = HEADER_FIXED + hintBytes.length + messageBytes.length + TAG_LEN;
   if (total > 0xffffffff) {
     throw new CryptoPicError("MESSAGE_TOO_LARGE", "Pesan terlalu besar untuk format CryptoPic.");
   }
-  const prefix = makeV3Header({ total, salt, iv, nonce, hintBytes, kdf });
+  const prefix = makeHeader({ total, salt, iv, nonce, hintBytes, kdf });
   const keys = await deriveKeys(password, salt, kdf);
   const ciphertext = new Uint8Array(
     await crypto.subtle.encrypt(
@@ -306,98 +246,59 @@ export async function encryptPayloadV3(password, message, hint = "", kdf = V3_KD
   return { payload, stegoKey: keys.stegoKey };
 }
 
-function parseV1(payload) {
-  if (payload.length < V1_HEADER_FIXED) {
-    throw new CryptoPicError("CORRUPT", "Header gambar CryptoPic V1 tidak lengkap.");
+export function parsePayload(payload) {
+  if (payload.length < HEADER_FIXED) {
+    throw new CryptoPicError("CORRUPT", "Header gambar CryptoPic V4 tidak lengkap.");
   }
-  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
-  const total = view.getUint32(6, false);
-  const hintLen = view.getUint16(38, false);
-  const prefixLength = V1_HEADER_FIXED + hintLen;
-  if (total > payload.length || prefixLength + TAG_LEN > total) {
-    throw new CryptoPicError("CORRUPT", "Struktur pesan V1 rusak atau gambar telah berubah.");
+  const hasMagic =
+    payload[0] === MAGIC[0] &&
+    payload[1] === MAGIC[1] &&
+    payload[2] === MAGIC[2] &&
+    payload[3] === MAGIC[3];
+  if (!hasMagic) {
+    throw new CryptoPicError(
+      "NOT_CRYPTOPIC",
+      "Gambar ini tidak berisi pesan CryptoPic V4, atau memakai format lama yang sudah tidak didukung."
+    );
   }
-  let hint = "";
-  if (payload[5] & FLAG_HINT) {
-    try {
-      hint = fromBytes(payload.slice(V1_HEADER_FIXED, prefixLength));
-    } catch {
-      throw new CryptoPicError("CORRUPT", "Petunjuk pada gambar V1 rusak.");
-    }
-  }
-  return {
-    version: VERSION_V1,
-    hint,
-    salt: payload.slice(10, 10 + V1_SALT_LEN),
-    iv: payload.slice(26, 26 + V1_IV_LEN),
-    ciphertext: payload.slice(prefixLength, total),
-  };
-}
-
-function parseV2(payload) {
-  if (payload.length < V2_HEADER_FIXED) {
-    throw new CryptoPicError("CORRUPT", "Header gambar CryptoPic V2 tidak lengkap.");
-  }
-  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
-  const total = view.getUint32(0, false);
-  const hintLen = view.getUint16(32, false);
-  const prefixLength = V2_HEADER_FIXED + hintLen;
-
-  if (prefixLength > payload.length || prefixLength + TAG_LEN > total) {
-    throw new CryptoPicError("CORRUPT", "Header V2 terpotong atau panjang payload tidak konsisten.");
+  const version = payload[4];
+  if (version !== VERSION) {
+    throw new CryptoPicError(
+      "LEGACY_FORMAT",
+      `Gambar ini memakai format CryptoPic lama (v${version}) yang sudah tidak didukung. ` +
+        "Minta pengirim membuat ulang gambar dengan versi terbaru."
+    );
   }
 
-  let hint = "";
-  try {
-    hint = fromBytes(payload.slice(V2_HEADER_FIXED, prefixLength));
-  } catch {
-    throw new CryptoPicError("CORRUPT", "Petunjuk pada gambar V2 rusak.");
-  }
-  return {
-    version: VERSION_V2,
-    hint,
-    salt: payload.slice(4, 4 + V2_SALT_LEN),
-    iv: payload.slice(20, 20 + V2_IV_LEN),
-    total,
-    prefixLength,
-    prefix: payload.slice(0, prefixLength),
-    kdf: V2_KDF,
-  };
-}
-
-function parseV3(payload) {
-  if (payload.length < V3_HEADER_FIXED) {
-    throw new CryptoPicError("CORRUPT", "Header gambar CryptoPic V3 tidak lengkap.");
-  }
   const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
   const total = view.getUint32(5, false);
   const memorySize = view.getUint32(9, false);
   const iterations = payload[13];
   const parallelism = payload[14];
   const hintLen = view.getUint16(51, false);
-  const prefixLength = V3_HEADER_FIXED + hintLen;
+  const prefixLength = HEADER_FIXED + hintLen;
 
   if (prefixLength > payload.length || prefixLength + TAG_LEN > total) {
-    throw new CryptoPicError("CORRUPT", "Header V3 terpotong atau panjang payload tidak konsisten.");
+    throw new CryptoPicError("CORRUPT", "Header V4 terpotong atau panjang payload tidak konsisten.");
   }
   // Jangan percaya parameter KDF dari header: batasi agar gambar jahat tidak
   // memaksa browser mengalokasikan memori raksasa atau menghitung terlalu lama.
   if (!isKdfAcceptable({ memorySize, iterations, parallelism })) {
-    throw new CryptoPicError("CORRUPT", "Parameter KDF pada gambar V3 tidak wajar.");
+    throw new CryptoPicError("CORRUPT", "Parameter KDF pada gambar V4 tidak wajar.");
   }
 
   let hint = "";
   try {
-    hint = fromBytes(payload.slice(V3_HEADER_FIXED, prefixLength));
+    hint = fromBytes(payload.slice(HEADER_FIXED, prefixLength));
   } catch {
-    throw new CryptoPicError("CORRUPT", "Petunjuk pada gambar V3 rusak.");
+    throw new CryptoPicError("CORRUPT", "Petunjuk pada gambar V4 rusak.");
   }
   return {
-    version: VERSION_V3,
+    version: VERSION,
     hint,
-    salt: payload.slice(23, 23 + V3_SALT_LEN),
-    iv: payload.slice(39, 39 + V3_IV_LEN),
-    nonce: payload.slice(15, 15 + V3_NONCE_LEN),
+    salt: payload.slice(23, 23 + SALT_LEN),
+    iv: payload.slice(39, 39 + IV_LEN),
+    nonce: payload.slice(15, 15 + NONCE_LEN),
     total,
     prefixLength,
     prefix: payload.slice(0, prefixLength),
@@ -405,38 +306,24 @@ function parseV3(payload) {
   };
 }
 
-export function parsePayload(payload) {
-  if (hasV1Magic(payload)) {
-    const version = payload[4];
-    if (version === VERSION_V1) return parseV1(payload);
-    if (version === VERSION_V3) return parseV3(payload);
-    throw new CryptoPicError("BAD_VERSION", `Versi payload bertanda tidak didukung (v${version}).`);
-  }
-  return parseV2(payload);
-}
-
 export async function decryptPayload(password, parsed, extractedCiphertext = null, derivedKeys = null) {
-  let key;
-  let ciphertext;
-  let additionalData;
-  if (parsed.version === VERSION_V1) {
-    key = await deriveV1Key(password, parsed.salt);
-    ciphertext = parsed.ciphertext;
-  } else {
-    const keys = derivedKeys || await deriveV2Keys(password, parsed.salt, parsed.kdf);
-    key = keys.encryptionKey;
-    ciphertext = extractedCiphertext;
-    additionalData = parsed.prefix;
-    if (!(ciphertext instanceof Uint8Array) || ciphertext.length !== parsed.total - parsed.prefixLength) {
-      throw new CryptoPicError("CORRUPT", "Bagian pesan V2 pada gambar tidak lengkap.");
-    }
+  if (!parsed || parsed.version !== VERSION) {
+    throw new CryptoPicError("LEGACY_FORMAT", "Format gambar lama tidak didukung.");
   }
+  if (
+    !(extractedCiphertext instanceof Uint8Array) ||
+    extractedCiphertext.length !== parsed.total - parsed.prefixLength
+  ) {
+    throw new CryptoPicError("CORRUPT", "Bagian pesan V4 pada gambar tidak lengkap.");
+  }
+
+  const keys = derivedKeys || await deriveKeys(password, parsed.salt, parsed.kdf);
 
   try {
     const plain = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: parsed.iv, ...(additionalData ? { additionalData, tagLength: 128 } : {}) },
-      key,
-      ciphertext
+      { name: "AES-GCM", iv: parsed.iv, additionalData: parsed.prefix, tagLength: 128 },
+      keys.encryptionKey,
+      extractedCiphertext
     );
     try {
       return fromBytes(new Uint8Array(plain));
@@ -447,7 +334,8 @@ export async function decryptPayload(password, parsed, extractedCiphertext = nul
     if (err instanceof CryptoPicError) throw err;
     throw new CryptoPicError(
       "WRONG_PASSWORD",
-      "Kata sandi tidak cocok atau data tersembunyi pada gambar telah berubah. Pastikan sandi sesuai dan gunakan PNG asli."
+      "Kata sandi tidak cocok atau data tersembunyi pada gambar telah berubah. " +
+        "Huruf besar/kecil tidak berpengaruh; pastikan spasi dan gunakan PNG asli."
     );
   }
 }

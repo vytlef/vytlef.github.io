@@ -1,8 +1,8 @@
 import {
-  encryptPayloadV3,
+  encryptPayload,
   parsePayload,
   decryptPayload,
-  deriveV2Keys,
+  deriveKeys,
   CryptoPicError,
 } from "./crypto.js";
 import {
@@ -12,7 +12,7 @@ import {
   pngRejectMessage,
   loadImageFromFile,
   imageToImageData,
-  maxMessageBytesV3,
+  maxMessageBytes,
   embedPayload,
   extractPayload,
   extractProtectedBody,
@@ -68,16 +68,12 @@ async function verifyEmbedding(blob, expectedPayload, stegoKey) {
   try {
     const prefix = extractPayload(imageData);
     const parsed = parsePayload(prefix);
-    if (parsed.version !== 1) {
-      // V2/V3: extractPayload hanya mengembalikan header; body diambil terpisah.
-      const body = await extractProtectedBody(imageData, parsed, stegoKey);
-      const full = new Uint8Array(prefix.length + body.length);
-      full.set(prefix);
-      full.set(body, prefix.length);
-      extracted = full;
-    } else {
-      extracted = prefix;
-    }
+    // extractPayload hanya mengembalikan header; body diambil terpisah.
+    const body = await extractProtectedBody(imageData, parsed, stegoKey);
+    const full = new Uint8Array(prefix.length + body.length);
+    full.set(prefix);
+    full.set(body, prefix.length);
+    extracted = full;
   } catch (err) {
     throw new StegoError(
       "VERIFY_FAILED",
@@ -217,7 +213,7 @@ let openPreviewUrl = null;
 function hideAvailable() {
   if (!hideState.img) return 0;
   const hint = $("hide-hint").value.trim();
-  return maxMessageBytesV3(hideState.width, hideState.height, hint);
+  return maxMessageBytes(hideState.width, hideState.height, hint);
 }
 
 /* ---------------- Kekuatan sandi & meter stealth ---------------- */
@@ -347,7 +343,7 @@ async function handleHideFile(file) {
     $("hide-preview-img").src = hidePreviewUrl;
     $("hide-file-name").textContent = file.name;
     $("hide-file-dims").textContent = `${img.naturalWidth}×${img.naturalHeight}px`;
-    $("hide-capacity").textContent = `Kapasitas pesan maks. ${formatBytes(maxMessageBytesV3(img.naturalWidth, img.naturalHeight, $("hide-hint").value.trim()))}`;
+    $("hide-capacity").textContent = `Kapasitas pesan maks. ${formatBytes(maxMessageBytes(img.naturalWidth, img.naturalHeight, $("hide-hint").value.trim()))}`;
     $("transparency-notice").hidden = !hasTransparency;
     $("hide-drop").hidden = true;
     $("hide-preview-wrap").hidden = false;
@@ -398,7 +394,7 @@ async function doEncrypt() {
 
   try {
     const imageData = hideState.imageData || imageToImageData(hideState.img).imageData;
-    const { payload, stegoKey } = await encryptPayloadV3(password, secret, hint);
+    const { payload, stegoKey } = await encryptPayload(password, secret, hint);
     const embedded = await embedPayload(imageData, payload, stegoKey);
     const blob = await imageDataToPngBlob(embedded);
 
@@ -498,11 +494,8 @@ async function handleOpenFile(file) {
       $("open-hint-text").textContent = parsed.hint;
       $("open-hint-box").hidden = false;
     }
-    $("open-password-hint").textContent = parsed.version === 1
-      ? "Gambar V1: huruf besar/kecil tidak dibedakan."
-      : parsed.version === 3
-        ? "Gambar V3: huruf besar/kecil dibedakan; bentuk Unicode dinormalisasi."
-        : "Gambar V2: huruf besar/kecil dibedakan; bentuk Unicode dinormalisasi.";
+    $("open-password-hint").textContent =
+      "Gambar V4: huruf besar/kecil tidak dibedakan; spasi tetap dihitung.";
     $("open-password-field").hidden = false;
     status.hidden = true;
     $("open-password").focus();
@@ -531,14 +524,9 @@ async function doDecrypt() {
   $("open-error").hidden = true;
 
   try {
-    let message;
-    if (openState.parsed.version === 1) {
-      message = await decryptPayload(password, openState.parsed);
-    } else {
-      const keys = await deriveV2Keys(password, openState.parsed.salt, openState.parsed.kdf);
-      const ciphertext = await extractProtectedBody(openState.imageData, openState.parsed, keys.stegoKey);
-      message = await decryptPayload(password, openState.parsed, ciphertext, keys);
-    }
+    const keys = await deriveKeys(password, openState.parsed.salt, openState.parsed.kdf);
+    const ciphertext = await extractProtectedBody(openState.imageData, openState.parsed, keys.stegoKey);
+    const message = await decryptPayload(password, openState.parsed, ciphertext, keys);
 
     $("open-message").textContent = message;
     const when = new Date().toLocaleString("id-ID", {

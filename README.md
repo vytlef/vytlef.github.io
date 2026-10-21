@@ -1,9 +1,12 @@
 # CryptoPic
 
 Sembunyikan pesan terenkripsi di dalam gambar PNG, tanpa server, tanpa akun.
-Seluruh proses berjalan di browser: enkripsi AES-GCM, kunci dari Argon2id, dan
-penyisipan payload ke bit piksel paling rendah (LSB) dengan koreksi galat.
+Seluruh proses berjalan di browser: enkripsi AES-GCM, kunci dari Argon2id, lalu
+penyisipan payload ke bit piksel paling rendah (LSB) memakai matrix embedding.
 Server Go hanya menyajikan berkas statis.
+
+Hanya ada satu format gambar (V4). Gambar dari versi lama tidak lagi bisa
+dibuka; minta pengirim membuat ulang gambarnya dengan versi terbaru.
 
 ## Menjalankan
 
@@ -15,14 +18,17 @@ go run .
 ## Alur
 
 - **Sembunyikan** — pilih PNG, tulis pesan, kata sandi, dan petunjuk opsional.
-  Hasilnya PNG baru yang bisa diunduh. Kata sandi minimal 8 karakter.
+  Hasilnya PNG baru yang bisa diunduh. Kata sandi minimal 8 karakter. Kata sandi
+  gambar **tidak peka huruf besar/kecil** ("Rahasia", "rahasia", dan "RAHASIA"
+  sama), tetapi spasi dan urutan karakter tetap dihitung.
 - **Buka** — unggah PNG hasil CryptoPic, masukkan kata sandi. Pesan hanya
   muncul jika tag autentikasi AES-GCM cocok. Setiap pesan yang berhasil dibuka
   otomatis dicatat sebagai memo lokal.
 - **Memo** — memo disimpan di IndexedDB. PIN memo (minimal 8 karakter) membuat
-  seluruh memo terenkripsi dengan Argon2id + AES-GCM. "Hapus semua" hanya
-  menghapus memo, bukan PIN. Vault lama yang masih memakai PBKDF2 akan
-  dimigrasikan otomatis ke Argon2id saat pertama kali dibuka dengan PIN yang benar.
+  seluruh memo terenkripsi dengan Argon2id + AES-GCM. PIN memo tetap
+  case-sensitive seperti sebelumnya. "Hapus semua" hanya menghapus memo, bukan
+  PIN. Vault lama yang masih memakai PBKDF2 akan dimigrasikan otomatis ke
+  Argon2id saat pertama kali dibuka dengan PIN yang benar.
 - **Gunakan Lagi** — setelah pesan dibuka, tombol ini membersihkan gambar lama
   lalu membukanya di tab Sembunyikan untuk dipakai menyisipkan pesan baru.
 
@@ -49,7 +55,7 @@ ulang menjadi kanvas, tetapi bukan berarti foto menjadi anonim.
 
 ## Batas parameter KDF
 
-Header gambar V3 membawa parameter Argon2id. Agar gambar jahat tidak memaksa
+Header gambar V4 membawa parameter Argon2id. Agar gambar jahat tidak memaksa
 browser menghitung terlalu lama, parameter di luar batas berikut ditolak:
 memori 8–256 MiB, iterasi 1–8, paralelisme 1–8, dan
 `memori × iterasi ≤ 512 MiB·iter`. Vault memo memakai

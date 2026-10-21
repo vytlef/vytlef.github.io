@@ -1,14 +1,13 @@
-const V1_HEADER_FIXED = 40;
-const V2_HEADER_FIXED = 34;
-const V3_HEADER_FIXED = 53;
-const V3_BOOTSTRAP_BYTES = 8;
-const V3_BOOTSTRAP_SAMPLES = V3_BOOTSTRAP_BYTES * 8;
+const MAGIC = [0x43, 0x50, 0x49, 0x43];
+const VERSION = 4;
+const HEADER_FIXED = 53;
+const BOOTSTRAP_BYTES = 8;
+const BOOTSTRAP_SAMPLES = BOOTSTRAP_BYTES * 8;
 const MATRIX_GROUP = 7;
 const MATRIX_BITS = 3;
 const ACTIVITY_MASK = 0xfc;
 const ACTIVITY_THRESHOLDS = [48, 32, 24, 16, 8, 4, 0];
 const TAG_LEN = 16;
-const HAMMING_BITS_PER_BYTE = 14;
 const MAX_EMBEDDED_SAMPLE_RATIO = 0.5;
 const RANDOM_CHUNK_BYTES = 64 * 1024;
 const UINT32_RANGE = 0x100000000;
@@ -149,36 +148,22 @@ export function imageToImageData(img) {
   return { imageData, canvas, hasTransparency };
 }
 
-export function capacityBytes(width, height) {
-  return Math.floor((width * height * 3) / 8);
-}
-
-export function maxMessageBytes(width, height, hint = "") {
-  const prefixLength = V2_HEADER_FIXED + encoder.encode(hint).length;
-  const totalSamples = width * height * 3;
-  const bodySlots = totalSamples - prefixLength * 8;
-  if (bodySlots <= 0) return 0;
-  const maxCodedBits = Math.floor(bodySlots * MAX_EMBEDDED_SAMPLE_RATIO);
-  const maxBodyBytes = Math.floor(maxCodedBits / HAMMING_BITS_PER_BYTE);
-  return Math.max(0, maxBodyBytes - TAG_LEN);
-}
-
 /**
- * Estimasi kapasitas format V3 (matrix embedding 3 bit / 7 sampel).
+ * Estimasi kapasitas format V4 (matrix embedding 3 bit / 7 sampel).
  * Header + bootstrap ikut dihitung dalam anggaran rasio modifikasi.
  */
-export function maxMessageBytesV3(width, height, hint = "") {
+export function maxMessageBytes(width, height, hint = "") {
   const totalSamples = width * height * 3;
-  const prefixLength = V3_HEADER_FIXED + encoder.encode(hint).length;
+  const prefixLength = HEADER_FIXED + encoder.encode(hint).length;
   const headerSamples = prefixLength * 8;
-  const budget = Math.floor(totalSamples * MAX_EMBEDDED_SAMPLE_RATIO) - V3_BOOTSTRAP_SAMPLES - headerSamples;
+  const budget = Math.floor(totalSamples * MAX_EMBEDDED_SAMPLE_RATIO) - BOOTSTRAP_SAMPLES - headerSamples;
   if (budget <= 0) return 0;
   const groups = Math.floor(budget / MATRIX_GROUP);
   const bodyBytes = Math.floor((groups * MATRIX_BITS) / 8);
   return Math.max(0, bodyBytes - TAG_LEN);
 }
 
-/* ---------------- V3: header tersebar + adaptive matrix embedding ---------------- */
+/* ---------------- V4: header tersebar + adaptive matrix embedding ---------------- */
 
 function fnv1a32(text) {
   let h = 0x811c9dc5;
@@ -189,7 +174,7 @@ function fnv1a32(text) {
   return h >>> 0;
 }
 
-function v3Seed(nonce, width, height) {
+function v4Seed(nonce, width, height) {
   let label = `${width}x${height}|`;
   for (let i = 0; i < nonce.length; i++) {
     label += nonce[i].toString(16).padStart(2, "0");
@@ -199,7 +184,7 @@ function v3Seed(nonce, width, height) {
 
 function bootstrapSet() {
   const set = new Set();
-  for (let i = 0; i < V3_BOOTSTRAP_SAMPLES; i++) set.add(i);
+  for (let i = 0; i < BOOTSTRAP_SAMPLES; i++) set.add(i);
   return set;
 }
 
@@ -213,7 +198,7 @@ function makeSeededPicker(seed, slotCount, excluded) {
       let attempts = 0;
       for (;;) {
         if (++attempts > attemptLimit) {
-          throw new StegoError("CAPACITY", "Ruang posisi header V3 tidak cukup.");
+          throw new StegoError("CAPACITY", "Ruang posisi header V4 tidak cukup.");
         }
         state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
         const word = state;
@@ -310,7 +295,7 @@ function chooseActivityThreshold(activity, needSamples) {
   return 0;
 }
 
-function makeV3BodyPicker(totalSamples, key, activity, threshold, excluded) {
+function makeV4BodyPicker(totalSamples, key, activity, threshold, excluded) {
   const occupied = new Uint8Array(Math.ceil(totalSamples / 8));
   const random = createRandomStream(key);
   const acceptedLimit = Math.floor(UINT32_RANGE / totalSamples) * totalSamples;
@@ -437,51 +422,6 @@ function readBit(data, sampleIndex) {
   return data[pixelIndex * 4 + channel] & 1;
 }
 
-function encodeHamming74(bytes) {
-  const encoded = new Uint8Array(bytes.length * HAMMING_BITS_PER_BYTE);
-  let out = 0;
-  for (const byte of bytes) {
-    for (const shift of [4, 0]) {
-      const nibble = (byte >> shift) & 0x0f;
-      const d1 = (nibble >> 3) & 1;
-      const d2 = (nibble >> 2) & 1;
-      const d3 = (nibble >> 1) & 1;
-      const d4 = nibble & 1;
-      encoded[out++] = d1 ^ d2 ^ d4;
-      encoded[out++] = d1 ^ d3 ^ d4;
-      encoded[out++] = d1;
-      encoded[out++] = d2 ^ d3 ^ d4;
-      encoded[out++] = d2;
-      encoded[out++] = d3;
-      encoded[out++] = d4;
-    }
-  }
-  return encoded;
-}
-
-function decodeHamming74(bits) {
-  if (bits.length % 14 !== 0) {
-    throw new StegoError("CORRUPT", "Panjang data koreksi kesalahan pada gambar tidak valid.");
-  }
-  const decoded = new Uint8Array(bits.length / 14);
-  let out = 0;
-  for (let byteIndex = 0; byteIndex < decoded.length; byteIndex++) {
-    let byte = 0;
-    for (let half = 0; half < 2; half++) {
-      const start = byteIndex * 14 + half * 7;
-      const code = bits.slice(start, start + 7);
-      const syndrome = (code[0] ^ code[2] ^ code[4] ^ code[6]) |
-        ((code[1] ^ code[2] ^ code[5] ^ code[6]) << 1) |
-        ((code[3] ^ code[4] ^ code[5] ^ code[6]) << 2);
-      if (syndrome > 0) code[syndrome - 1] ^= 1;
-      const nibble = (code[2] << 3) | (code[4] << 2) | (code[5] << 1) | code[6];
-      byte |= nibble << (half === 0 ? 4 : 0);
-    }
-    decoded[out++] = byte;
-  }
-  return decoded;
-}
-
 function incrementCounter(counter, blocks) {
   let carry = blocks;
   for (let i = counter.length - 1; i >= 0 && carry > 0; i--) {
@@ -489,7 +429,7 @@ function incrementCounter(counter, blocks) {
     counter[i] = sum & 0xff;
     carry = Math.floor(carry / 256) + (sum > 0xff ? 1 : 0);
   }
-  if (carry > 0) throw new StegoError("CAPACITY", "Gambar terlalu besar untuk mode penyebaran V2.");
+  if (carry > 0) throw new StegoError("CAPACITY", "Gambar terlalu besar untuk mode penyebaran V4.");
 }
 
 function createRandomStream(key) {
@@ -517,103 +457,58 @@ function createRandomStream(key) {
   };
 }
 
-function makeUniqueSamplePicker(slotCount, key) {
-  if (!Number.isSafeInteger(slotCount) || slotCount < 1 || slotCount > UINT32_RANGE) {
-    throw new StegoError("CAPACITY", "Jumlah piksel gambar berada di luar batas V2.");
-  }
-  const occupied = new Uint8Array(Math.ceil(slotCount / 8));
-  const random = createRandomStream(key);
-  const acceptedLimit = Math.floor(UINT32_RANGE / slotCount) * slotCount;
-
-  return {
-    async refill() {
-      await random.refill();
-    },
-    nextSample() {
-      while (true) {
-        const word = random.nextUint32();
-        if (word === null) return null;
-        if (word >= acceptedLimit) continue;
-        const sample = word % slotCount;
-        const mask = 1 << (sample & 7);
-        const byteIndex = sample >> 3;
-        if (occupied[byteIndex] & mask) continue;
-        occupied[byteIndex] |= mask;
-        return sample;
-      }
-    },
-  };
-}
-
-function validateV2Payload(payload, imageData) {
-  if (payload.length < V2_HEADER_FIXED) {
-    throw new StegoError("CORRUPT", "Payload CryptoPic V2 tidak lengkap.");
-  }
-  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
-  const total = view.getUint32(0, false);
-  const prefixLength = V2_HEADER_FIXED + view.getUint16(32, false);
-  if (total !== payload.length || prefixLength + TAG_LEN > total) {
-    throw new StegoError("CORRUPT", "Panjang payload CryptoPic V2 tidak konsisten.");
-  }
-  const availableSlots = imageData.width * imageData.height * 3 - prefixLength * 8;
-  const codedBits = (payload.length - prefixLength) * HAMMING_BITS_PER_BYTE;
-  if (availableSlots <= 0 || codedBits > availableSlots * MAX_EMBEDDED_SAMPLE_RATIO) {
-    const maxBytes = maxMessageBytes(imageData.width, imageData.height, "");
-    throw new StegoError(
-      "TOO_LARGE",
-      `Pesan dan petunjuk melebihi kapasitas aman gambar (sekitar ${maxBytes} byte pesan). Gunakan gambar beresolusi lebih besar atau pesan lebih pendek.`
-    );
-  }
-  return { prefixLength, availableSlots, codedBits };
-}
-
-async function embedV3Payload(imageData, data, payload, stegoKey) {
-  const width = imageData.width;
-  const height = imageData.height;
-  const totalSamples = width * height * 3;
-  if (payload.length < V3_HEADER_FIXED) {
-    throw new StegoError("CORRUPT", "Payload CryptoPic V3 tidak lengkap.");
+function validateV4Payload(payload, imageData, hint = "") {
+  if (payload.length < HEADER_FIXED) {
+    throw new StegoError("CORRUPT", "Payload CryptoPic V4 tidak lengkap.");
   }
   const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
   const total = view.getUint32(5, false);
   const hintLen = view.getUint16(51, false);
-  const prefixLength = V3_HEADER_FIXED + hintLen;
+  const prefixLength = HEADER_FIXED + hintLen;
   if (total !== payload.length || prefixLength + TAG_LEN > total) {
-    throw new StegoError("CORRUPT", "Panjang payload CryptoPic V3 tidak konsisten.");
+    throw new StegoError("CORRUPT", "Panjang payload CryptoPic V4 tidak konsisten.");
   }
-  const nonce = payload.slice(15, 23);
-  const prefix = payload.subarray(0, prefixLength);
-  const body = payload.subarray(prefixLength);
-  const headerSamples = prefixLength * 8;
-  const groups = Math.ceil((body.length * 8) / MATRIX_BITS);
-  const bodySamples = groups * MATRIX_GROUP;
-  const usedSamples = V3_BOOTSTRAP_SAMPLES + headerSamples + bodySamples;
+  const totalSamples = imageData.width * imageData.height * 3;
+  const groups = Math.ceil(((payload.length - prefixLength) * 8) / MATRIX_BITS);
+  const usedSamples = BOOTSTRAP_SAMPLES + prefixLength * 8 + groups * MATRIX_GROUP;
   const budget = Math.floor(totalSamples * MAX_EMBEDDED_SAMPLE_RATIO);
-
-  if (totalSamples < V3_BOOTSTRAP_SAMPLES + headerSamples || usedSamples > budget) {
-    const maxBytes = maxMessageBytesV3(width, height, "");
+  if (totalSamples < BOOTSTRAP_SAMPLES + prefixLength * 8 || usedSamples > budget) {
+    const maxBytes = maxMessageBytes(imageData.width, imageData.height, hint);
     throw new StegoError(
       "TOO_LARGE",
       `Pesan dan petunjuk melebihi kapasitas aman gambar (sekitar ${maxBytes} byte pesan). ` +
         "Gunakan gambar beresolusi lebih besar atau pesan lebih pendek."
     );
   }
+  return { prefixLength, groups };
+}
+
+async function embedV4Payload(imageData, data, payload, stegoKey) {
+  const width = imageData.width;
+  const height = imageData.height;
+  const totalSamples = width * height * 3;
+  const { prefixLength } = validateV4Payload(payload, imageData);
+  const nonce = payload.slice(15, 23);
+  const prefix = payload.subarray(0, prefixLength);
+  const body = payload.subarray(prefixLength);
+  const groups = Math.ceil((body.length * 8) / MATRIX_BITS);
+  const bodySamples = groups * MATRIX_GROUP;
 
   // Bootstrap: nonce 8 byte, ditulis berurutan (nilainya acak sehingga tidak
-  // membocorkan struktur seperti header V1/V2).
+  // membocorkan struktur seperti header format lama).
   writeSequentialBytes(data, nonce);
 
-  const seed = v3Seed(nonce, width, height);
+  const seed = v4Seed(nonce, width, height);
   const bootstrap = bootstrapSet();
   const headerPicker = makeSeededPicker(seed, totalSamples, bootstrap);
   const used = writeHeaderBytes(data, prefix, headerPicker);
 
   const excluded = new Set(used);
-  for (let i = 0; i < V3_BOOTSTRAP_SAMPLES; i++) excluded.add(i);
+  for (let i = 0; i < BOOTSTRAP_SAMPLES; i++) excluded.add(i);
 
   const activity = computeActivity(imageData);
   const threshold = chooseActivityThreshold(activity, bodySamples + excluded.size);
-  const picker = makeV3BodyPicker(totalSamples, stegoKey, activity, threshold, excluded);
+  const picker = makeV4BodyPicker(totalSamples, stegoKey, activity, threshold, excluded);
   await picker.refill();
   await embedMatrixBody(data, body, picker);
 
@@ -621,62 +516,41 @@ async function embedV3Payload(imageData, data, payload, stegoKey) {
 }
 
 export async function embedPayload(imageData, payload, stegoKey = null) {
-  const totalSamples = imageData.width * imageData.height * 3;
-  const data = new Uint8ClampedArray(imageData.data);
+  if (!stegoKey) {
+    throw new StegoError("CRYPTO_KEY_REQUIRED", "Payload V4 memerlukan kunci posisi steganografi.");
+  }
   const hasMagic =
     payload.length >= 5 &&
-    payload[0] === 0x43 &&
-    payload[1] === 0x50 &&
-    payload[2] === 0x49 &&
-    payload[3] === 0x43;
-
-  if (hasMagic && payload[4] === 1) {
-    if (payload.length > Math.floor(totalSamples / 8)) {
-      throw new StegoError("TOO_LARGE", "Pesan + petunjuk melebihi kapasitas PNG.");
-    }
-    writeSequentialBytes(data, payload);
-    return new ImageData(data, imageData.width, imageData.height);
-  }
-  if (hasMagic && payload[4] === 3) {
-    if (!stegoKey) {
-      throw new StegoError("CRYPTO_KEY_REQUIRED", "Payload V3 memerlukan kunci posisi steganografi.");
-    }
-    return embedV3Payload(imageData, data, payload, stegoKey);
-  }
-  if (hasMagic || !stegoKey) {
-    throw new StegoError("CRYPTO_KEY_REQUIRED", "Payload V2 memerlukan kunci posisi steganografi.");
+    payload[0] === MAGIC[0] &&
+    payload[1] === MAGIC[1] &&
+    payload[2] === MAGIC[2] &&
+    payload[3] === MAGIC[3];
+  if (!hasMagic || payload[4] !== VERSION) {
+    throw new StegoError("BAD_VERSION", "Payload bukan format CryptoPic V4 yang didukung.");
   }
 
-  const { prefixLength, availableSlots, codedBits } = validateV2Payload(payload, imageData);
-  const prefix = payload.subarray(0, prefixLength);
-  writeSequentialBytes(data, prefix);
-  const encodedBody = encodeHamming74(payload.subarray(prefixLength));
-  const picker = makeUniqueSamplePicker(availableSlots, stegoKey);
-  const firstBodySample = prefixLength * 8;
-  for (let i = 0; i < codedBits; i++) {
-    let sample = picker.nextSample();
-    if (sample === null) {
-      await picker.refill();
-      i--;
-      continue;
-    }
-    writeBit(data, firstBodySample + sample, encodedBody[i]);
-  }
-  return new ImageData(data, imageData.width, imageData.height);
+  const data = new Uint8ClampedArray(imageData.data);
+  return embedV4Payload(imageData, data, payload, stegoKey);
 }
 
-function tryExtractV3(data, width, height) {
+function tryExtractV4(data, width, height) {
   const totalSamples = width * height * 3;
-  if (totalSamples < V3_BOOTSTRAP_SAMPLES + V3_HEADER_FIXED * 8) return null;
+  if (totalSamples < BOOTSTRAP_SAMPLES + HEADER_FIXED * 8) return null;
 
-  const nonce = readSequentialBytes(data, V3_BOOTSTRAP_BYTES);
-  const seed = v3Seed(nonce, width, height);
+  const nonce = readSequentialBytes(data, BOOTSTRAP_BYTES);
+  const seed = v4Seed(nonce, width, height);
   const bootstrap = bootstrapSet();
 
   try {
     const headerPicker = makeSeededPicker(seed, totalSamples, bootstrap);
-    const { bytes: fixed } = readHeaderBytes(data, V3_HEADER_FIXED, headerPicker);
-    if (!(fixed[0] === 0x43 && fixed[1] === 0x50 && fixed[2] === 0x49 && fixed[3] === 0x43 && fixed[4] === 3)) {
+    const { bytes: fixed } = readHeaderBytes(data, HEADER_FIXED, headerPicker);
+    if (!(
+      fixed[0] === MAGIC[0] &&
+      fixed[1] === MAGIC[1] &&
+      fixed[2] === MAGIC[2] &&
+      fixed[3] === MAGIC[3] &&
+      fixed[4] === VERSION
+    )) {
       return null;
     }
     if (!nonceEqual(fixed.slice(15, 23), nonce)) return null;
@@ -684,11 +558,11 @@ function tryExtractV3(data, width, height) {
     const view = new DataView(fixed.buffer, fixed.byteOffset, fixed.byteLength);
     const total = view.getUint32(5, false);
     const hintLen = view.getUint16(51, false);
-    const prefixLength = V3_HEADER_FIXED + hintLen;
+    const prefixLength = HEADER_FIXED + hintLen;
     if (
       prefixLength + TAG_LEN > total ||
       total > totalSamples ||
-      V3_BOOTSTRAP_SAMPLES + prefixLength * 8 > totalSamples
+      BOOTSTRAP_SAMPLES + prefixLength * 8 > totalSamples
     ) {
       return null;
     }
@@ -699,7 +573,7 @@ function tryExtractV3(data, width, height) {
     }
     const prefix = new Uint8Array(prefixLength);
     prefix.set(fixed);
-    prefix.set(hintBytes, V3_HEADER_FIXED);
+    prefix.set(hintBytes, HEADER_FIXED);
     return prefix;
   } catch {
     return null;
@@ -709,109 +583,74 @@ function tryExtractV3(data, width, height) {
 export function extractPayload(imageData) {
   const data = imageData.data;
   const totalSamples = imageData.width * imageData.height * 3;
-  if (Math.floor(totalSamples / 8) < V1_HEADER_FIXED + TAG_LEN) {
+  if (Math.floor(totalSamples / 8) < HEADER_FIXED + TAG_LEN) {
     throw new StegoError("NOT_CRYPTOPIC", "Gambar terlalu kecil untuk berisi pesan CryptoPic.");
   }
 
-  const v3 = tryExtractV3(data, imageData.width, imageData.height);
-  if (v3) return v3;
+  const v4 = tryExtractV4(data, imageData.width, imageData.height);
+  if (v4) return v4;
 
-  const firstFour = readSequentialBytes(data, 4);
-  const isV1 = firstFour[0] === 0x43 && firstFour[1] === 0x50 && firstFour[2] === 0x49 && firstFour[3] === 0x43;
-  let version = 2;
-  if (isV1) {
-    version = readSequentialBytes(data, 5)[4];
-    if (version !== 1) {
-      throw new StegoError("BAD_VERSION", `Versi payload bertanda tidak didukung (v${version}).`);
-    }
+  // Deteksi minimal format lama agar pesan errornya jelas. Jalur dekripsi lama
+  // sudah dihapus; gambar lama memang tidak didukung lagi.
+  const firstFive = readSequentialBytes(data, 5);
+  const legacyMagic = firstFive[0] === MAGIC[0] && firstFive[1] === MAGIC[1] && firstFive[2] === MAGIC[2] && firstFive[3] === MAGIC[3];
+  if (legacyMagic && firstFive[4] !== VERSION) {
+    throw new StegoError(
+      "LEGACY_FORMAT",
+      `Gambar ini memakai format CryptoPic lama (v${firstFive[4]}) yang sudah tidak didukung. ` +
+        "Minta pengirim membuat ulang gambar dengan versi terbaru."
+    );
   }
 
-  const fixedLength = version === 1 ? V1_HEADER_FIXED : V2_HEADER_FIXED;
-  const fixed = readSequentialBytes(data, fixedLength);
-  const view = new DataView(fixed.buffer);
-  const total = view.getUint32(version === 1 ? 6 : 0, false);
-  const prefixLength = version === 1
-    ? V1_HEADER_FIXED + view.getUint16(38, false)
-    : V2_HEADER_FIXED + view.getUint16(32, false);
-  if (total > Math.floor(totalSamples / 8) || prefixLength + TAG_LEN > total) {
-    throw new StegoError("CORRUPT", "Piksel gambar tidak konsisten atau pesan telah rusak.");
-  }
-  if (version === 2) {
-    const bodyLength = total - prefixLength;
-    const remainingSamples = totalSamples - prefixLength * 8;
-    if (prefixLength * 8 > totalSamples || bodyLength * HAMMING_BITS_PER_BYTE > remainingSamples * MAX_EMBEDDED_SAMPLE_RATIO) {
-      throw new StegoError("CORRUPT", "Header CryptoPic V2 menunjukkan kapasitas gambar yang tidak valid.");
-    }
-  }
-  return readSequentialBytes(data, version === 1 ? total : prefixLength);
+  throw new StegoError(
+    "NOT_CRYPTOPIC",
+    "Gambar ini tidak berisi pesan CryptoPic V4, atau memakai format lama yang sudah tidak didukung."
+  );
 }
 
-async function extractV3Body(imageData, parsed, stegoKey) {
+async function extractV4Body(imageData, parsed, stegoKey) {
   const width = imageData.width;
   const height = imageData.height;
   const totalSamples = width * height * 3;
   const bodyBytes = parsed.total - parsed.prefixLength;
   if (bodyBytes < TAG_LEN) {
-    throw new StegoError("CORRUPT", "Payload V3 tidak lengkap.");
+    throw new StegoError("CORRUPT", "Payload V4 tidak lengkap.");
   }
-  if (!parsed.nonce || parsed.nonce.length !== V3_BOOTSTRAP_BYTES) {
-    throw new StegoError("CORRUPT", "Nonce V3 pada gambar tidak valid.");
+  if (!parsed.nonce || parsed.nonce.length !== BOOTSTRAP_BYTES) {
+    throw new StegoError("CORRUPT", "Nonce V4 pada gambar tidak valid.");
   }
 
   // Hitung ulang posisi header agar bisa dikecualikan dari pemilihan body.
-  const seed = v3Seed(parsed.nonce, width, height);
+  const seed = v4Seed(parsed.nonce, width, height);
   const bootstrap = bootstrapSet();
   const headerPicker = makeSeededPicker(seed, totalSamples, bootstrap);
   const { used } = readHeaderBytes(imageData.data, parsed.prefixLength, headerPicker);
 
   const excluded = new Set(used);
-  for (let i = 0; i < V3_BOOTSTRAP_SAMPLES; i++) excluded.add(i);
+  for (let i = 0; i < BOOTSTRAP_SAMPLES; i++) excluded.add(i);
 
   const groups = Math.ceil((bodyBytes * 8) / MATRIX_BITS);
   const bodySamples = groups * MATRIX_GROUP;
   const budget = Math.floor(totalSamples * MAX_EMBEDDED_SAMPLE_RATIO);
-  if (V3_BOOTSTRAP_SAMPLES + parsed.prefixLength * 8 + bodySamples > budget) {
-    throw new StegoError("CORRUPT", "Payload V3 tidak muat pada gambar atau pikselnya telah berubah.");
+  if (BOOTSTRAP_SAMPLES + parsed.prefixLength * 8 + bodySamples > budget) {
+    throw new StegoError("CORRUPT", "Payload V4 tidak muat pada gambar atau pikselnya telah berubah.");
   }
 
   const activity = computeActivity(imageData);
   const threshold = chooseActivityThreshold(activity, bodySamples + excluded.size);
-  const picker = makeV3BodyPicker(totalSamples, stegoKey, activity, threshold, excluded);
+  const picker = makeV4BodyPicker(totalSamples, stegoKey, activity, threshold, excluded);
   await picker.refill();
   return extractMatrixBody(imageData.data, bodyBytes, picker);
 }
 
 export async function extractProtectedBody(imageData, parsed, stegoKey) {
   if (!stegoKey) {
-    throw new StegoError("CRYPTO_KEY_REQUIRED", "Payload terproteksi memerlukan kunci posisi steganografi.");
+    throw new StegoError("CRYPTO_KEY_REQUIRED", "Payload V4 memerlukan kunci posisi steganografi.");
   }
-  if (parsed.version === 3) {
-    return extractV3Body(imageData, parsed, stegoKey);
+  if (!parsed || parsed.version !== VERSION) {
+    throw new StegoError("LEGACY_FORMAT", "Format gambar lama tidak didukung.");
   }
-  if (parsed.version !== 2) {
-    throw new StegoError("CRYPTO_KEY_REQUIRED", "Payload V2 memerlukan kunci posisi steganografi.");
-  }
-  const bodyLength = parsed.total - parsed.prefixLength;
-  const codedBits = bodyLength * HAMMING_BITS_PER_BYTE;
-  const totalSamples = imageData.width * imageData.height * 3;
-  const availableSlots = totalSamples - parsed.prefixLength * 8;
-  if (bodyLength < TAG_LEN || availableSlots <= 0 || codedBits > availableSlots * MAX_EMBEDDED_SAMPLE_RATIO) {
-    throw new StegoError("CORRUPT", "Payload V2 tidak muat pada gambar atau pikselnya telah berubah.");
-  }
-
-  const coded = new Uint8Array(codedBits);
-  const picker = makeUniqueSamplePicker(availableSlots, stegoKey);
-  const firstBodySample = parsed.prefixLength * 8;
-  for (let i = 0; i < codedBits; i++) {
-    let sample = picker.nextSample();
-    if (sample === null) {
-      await picker.refill();
-      i--;
-      continue;
-    }
-    coded[i] = readBit(imageData.data, firstBodySample + sample);
-  }
-  return decodeHamming74(coded);
+  return extractV4Body(imageData, parsed, stegoKey);
 }
 
 export function imageDataToPngBlob(imageData) {

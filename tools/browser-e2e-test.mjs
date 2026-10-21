@@ -253,6 +253,15 @@ async function runFlow(browser, { label, viewport, isMobile, hasTouch, deviceSca
     assert(hintText === hint, `Petunjuk tidak cocok: ${hintText}`);
     const clearedOpen = await page.inputValue("#open-password");
     assert(clearedOpen === "", "Kata sandi open tidak dibersihkan setelah dekripsi.");
+
+    // Sandi V4 tidak peka huruf besar/kecil: bentuk kapitalisasi beda tetap membuka.
+    await page.click("#open-replace");
+    const gotLower = await openMessage(page, stegoPath, PASSWORD.toLowerCase());
+    assert(
+      gotLower === message,
+      `Sandi huruf kecil tidak membuka gambar V4.\nHarap: ${message}\nDapat: ${gotLower}`
+    );
+    await page.click("#open-replace");
     assert(pageErrors.length === 0, `Ada error halaman: ${pageErrors.join(" | ")}`);
   } finally {
     await close();
