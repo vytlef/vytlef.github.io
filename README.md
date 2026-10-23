@@ -20,10 +20,11 @@ go run .
 - **Sembunyikan** — pilih PNG, tulis pesan, kata sandi, dan petunjuk opsional.
   Hasilnya PNG baru yang bisa diunduh. Kata sandi minimal 8 karakter. Kata sandi
   gambar **tidak peka huruf besar/kecil** ("Rahasia", "rahasia", dan "RAHASIA"
-  sama), tetapi spasi dan urutan karakter tetap dihitung.
+  sama), tetapi spasi dan urutan karakter tetap dihitung. PNG 16-bit otomatis
+  dikonversi ke 8-bit (lihat [Kedalaman warna PNG](#kedalaman-warna-png)).
 - **Buka** — unggah PNG hasil CryptoPic, masukkan kata sandi. Pesan hanya
   muncul jika tag autentikasi AES-GCM cocok. Setiap pesan yang berhasil dibuka
-  otomatis dicatat sebagai memo lokal.
+  otomatis dicatat sebagai memo lokal. PNG 16-bit ditolak dengan pesan jelas.
 - **Memo** — memo disimpan di IndexedDB. PIN memo (minimal 8 karakter) membuat
   seluruh memo terenkripsi dengan Argon2id + AES-GCM. PIN memo tetap
   case-sensitive seperti sebelumnya. "Hapus semua" hanya menghapus memo, bukan
@@ -53,6 +54,26 @@ Jangan pakai ulang foto yang isinya sendiri sensitif atau mudah dikenali.
 CryptoPic juga tidak menghapus metadata EXIF karena gambar selalu diproses
 ulang menjadi kanvas, tetapi bukan berarti foto menjadi anonim.
 
+## Kedalaman warna PNG
+
+Kanvas browser hanya bekerja pada 8-bit per kanal, sehingga pesan CryptoPic
+selalu ditulis ke PNG 8-bit. Perlakuan untuk PNG 16-bit sengaja dibedakan:
+
+- **Sembunyikan:** PNG 16-bit diterima dan **dikonversi otomatis** ke PNG 8-bit
+  sebelum pesan disisipkan. Pratinjau dan berkas yang diunduh adalah versi 8-bit,
+  dan sebuah notice menjelaskan konversi ini. Gradasi warna yang sangat halus
+  dapat sedikit disederhanakan; konversi tidak menyesatkan karena hasil unduhan
+  memang berkas baru. Jika PNG 16-bit juga memiliki area transparan, notice
+  transparansi tetap muncul karena area tersebut diratakan ke putih.
+- **Buka:** PNG 16-bit **ditolak** dengan pesan jelas, tanpa konversi diam-diam.
+  Pesan CryptoPic hanya pernah ditulis pada PNG 8-bit, jadi gambar 16-bit tidak
+  mungkin berisi payload. Konversi saat membuka justru akan mengubah piksel dan
+  merusak LSB, sehingga penolakan adalah perilaku yang benar.
+
+PNG dengan kedalaman selain 8-bit/16-bit (mis. 4-bit palette) dan PNG berprofil
+warna ICC juga ditolak, baik saat menyembunyikan maupun membuka, karena kanvas
+akan mengubah piksel.
+
 ## Batas parameter KDF
 
 Header gambar V4 membawa parameter Argon2id. Agar gambar jahat tidak memaksa
@@ -75,6 +96,12 @@ Argon2id 64 MiB, 3 iterasi, paralelisme 1.
   salinan di server).
 - Mode privat/incognito tetap bisa dipakai, tetapi penyimpanan bisa terhapus
   saat tab ditutup.
+- Perhitungan Argon2id berjalan di Web Worker terpisah. Jika worker tidak
+  merespons dalam 45 detik (mis. gagal memuat skrip secara sesaat atau
+  kehabisan memori), CryptoPic memakai satu worker baru untuk mencoba sekali
+  lagi. Bila tetap gagal, muncul pesan error yang jelas, bukan spinner tanpa
+  akhir. Percobaan ulang aman karena Argon2id selalu menghasilkan kunci yang
+  sama untuk input yang sama.
 - Animasi "Gunakan Lagi" mengikuti pengaturan `prefers-reduced-motion` dan bisa
   ditutup dengan Esc.
 
@@ -84,6 +111,13 @@ Argon2id 64 MiB, 3 iterasi, paralelisme 1.
 # Enkripsi, steganografi, sanitasi, batas KDF
 node tools/crypto-roundtrip-test.mjs
 
+# Node 26 + hash-wasm in-process menumpuk memori WASM setelah puluhan
+# panggilan Argon2id (aplikasi browser tidak terkena karena tiap panggilan
+# memakai worker baru). Bila suite terhenti dengan "Invalid typed array
+# length", jalankan per rentang grup dalam proses terpisah:
+CRYPTOPIC_TEST_RANGE=1-8 node tools/crypto-roundtrip-test.mjs
+CRYPTOPIC_TEST_RANGE=9-18 node tools/crypto-roundtrip-test.mjs
+
 # Go
 go test ./...
 go vet ./...
@@ -91,6 +125,10 @@ go vet ./...
 # E2E browser sungguhan (butuh playwright-core)
 npm i playwright-core
 node tools/browser-e2e-test.mjs
+
+# Matriks banyak variasi gambar (ukuran, tipe warna, 8/16-bit, tekstur) di
+# fitur Sembunyikan: sembunyikan -> unduh -> buka -> bandingkan pesan.
+node tools/browser-image-matrix.mjs
 ```
 
 Variabel lingkungan E2E:
@@ -101,3 +139,6 @@ Variabel lingkungan E2E:
 - `CRYPTOPIC_PROFILE` — folder profil sementara; wajib untuk Brave agar Shields
   dimatikan otomatis untuk origin uji
 - `RUNS` — jumlah iterasi desktop dan mobile per mode (default 5)
+- `REPEATS` — jumlah pengulangan seluruh matriks gambar (default 2,
+  hanya untuk `browser-image-matrix.mjs`)
+- `ONLY` — filter nama kasus matriks berdasarkan substring (opsional)
