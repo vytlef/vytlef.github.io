@@ -50,12 +50,11 @@ export function readFileBytes(file) {
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
 /**
- * Memvalidasi struktur PNG pada tingkat byte: menolak PNG dengan kedalaman
- * selain 8-bit (canvas akan memotong 16-bit dan merusak LSB) dan PNG dengan
- * profil warna ICC (canvas akan mengonversi warna dan mengubah piksel).
- * Mengembalikan info IHDR bila valid.
+ * Membaca IHDR PNG pada tingkat byte: memeriksa tanda tangan, urutan chunk, dan
+ * menolak profil warna ICC (canvas akan mengonversi warna dan mengubah piksel).
+ * Tidak memeriksa kedalaman warna supaya pemanggil bisa memutuskan konversi.
  */
-export function validatePNGStructure(arrayBuffer) {
+export function readPngIhdr(arrayBuffer) {
   const bytes = new Uint8Array(arrayBuffer);
   if (bytes.length < 8 || !PNG_SIGNATURE.every((b, i) => bytes[i] === b)) {
     throw new StegoError("BAD_PNG", "File bukan PNG valid (tanda tangan rusak).");
@@ -96,9 +95,27 @@ export function validatePNGStructure(arrayBuffer) {
   if (!ihdr) {
     throw new StegoError("BAD_PNG", "PNG tidak memiliki header IHDR.");
   }
+  return ihdr;
+}
+
+/**
+ * Memvalidasi struktur PNG pada tingkat byte: menolak PNG dengan kedalaman
+ * selain 8-bit (canvas akan memotong 16-bit dan merusak LSB) dan PNG dengan
+ * profil warna ICC (canvas akan mengonversi warna dan mengubah piksel).
+ * Mengembalikan info IHDR bila valid.
+ */
+export function validatePNGStructure(arrayBuffer) {
+  const ihdr = readPngIhdr(arrayBuffer);
   if (ihdr.bitDepth !== 8) {
+    if (ihdr.bitDepth === 16) {
+      throw new StegoError(
+        "BIT_DEPTH",
+        "PNG ini memakai kedalaman 16-bit per channel. Kanvas browser hanya bekerja pada 8-bit sehingga LSB 16-bit " +
+          "tidak dapat dipakai dengan aman. Simpan ulang PNG sebagai 8-bit lalu coba lagi."
+      );
+    }
     throw new StegoError(
-      "BAD_PNG",
+      "BIT_DEPTH",
       `PNG menggunakan kedalaman ${ihdr.bitDepth}-bit. CryptoPic membutuhkan PNG 8-bit agar piksel tidak berubah. ` +
         "Simpan ulang PNG sebagai 8-bit lalu coba lagi."
     );
@@ -107,6 +124,32 @@ export function validatePNGStructure(arrayBuffer) {
     throw new StegoError("BAD_PNG", "PNG menggunakan tipe warna yang tidak didukung.");
   }
   return ihdr;
+}
+
+/**
+ * True bila PNG valid tetapi memakai kedalaman 16-bit. Dipakai untuk memutuskan
+ * apakah gambar perlu dikonversi (mode sembunyikan) atau ditolak (mode buka).
+ * Sengaja membaca IHDR tanpa memanggil validatePNGStructure: fungsi itu memang
+ * melempar untuk 16-bit, sedangkan pemanggil justru perlu tahu kedalamannya.
+ */
+export function is16BitPng(arrayBuffer) {
+  return readPngIhdr(arrayBuffer).bitDepth === 16;
+}
+
+/**
+ * Konversi gambar apa pun (termasuk PNG 16-bit) menjadi PNG 8-bit melalui
+ * kanvas. Kanvas memotong presisi 16→8 bit, hasilnya PNG 8-bit valid yang aman
+ * untuk steganografi LSB. Dipakai hanya saat menyembunyikan pesan: berkas yang
+ * dihasilkan memang berkas baru, jadi konversi tidak menyesatkan.
+ *
+ * `hasTransparency` dihitung dari gambar asli, karena konversi meratakan alpha
+ * ke putih; pemanggil perlu tahu agar notice transparansi tetap muncul.
+ */
+export async function convertTo8BitPngBlob(file) {
+  const img = await loadImageFromFile(file);
+  const { imageData, hasTransparency } = imageToImageData(img);
+  const blob = await imageDataToPngBlob(imageData);
+  return { blob, hasTransparency };
 }
 
 export function loadImageFromFile(file) {
@@ -130,17 +173,26 @@ export function imageToImageData(img) {
   canvas.width = img.naturalWidth;
   canvas.height = img.naturalHeight;
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  // Deteksi transparansi sebelum diratakan ke putih, agar UI bisa memberi tahu pengguna.
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  // Deteksi transparansi dari piksel asli. Menggambar di atas latar putih lebih
+  // dulu akan mengomposit alpha sehingga hasilnya selalu 255; karena itu gambar
+  // dibaca sekali tanpa latar, baru diratakan ke putih bila memang transparan.
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(img, 0, 0);
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   let hasTransparency = false;
   for (let i = 3; i < imageData.data.length; i += 4) {
     if (imageData.data[i] !== 255) {
       hasTransparency = true;
       break;
     }
+  }
+  if (hasTransparency) {
+    // Ratakan ke putih seperti perilaku sebelumnya agar pesan tidak rusak.
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0);
+    imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   }
   for (let i = 3; i < imageData.data.length; i += 4) {
     imageData.data[i] = 255;

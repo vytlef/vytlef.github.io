@@ -27,10 +27,25 @@ const stego = await importSource("../web/js/stego.js");
 let passed = 0;
 const started = performance.now();
 
+/*
+ * Node 26 + hash-wasm 4.12.0 menumpuk memori WASM antar panggilan Argon2id
+ * in-process (aplikasi browser tidak terkena karena selalu memakai worker baru
+ * tiap panggilan). Untuk bisa menjalankan seluruh suite di Node, grup bisa
+ * dipilih lewat variabel lingkungan, mis. CRYPTOPIC_TEST_RANGE=1-8.
+ */
+const rangeEnv = process.env.CRYPTOPIC_TEST_RANGE || "";
+const [rangeFrom, rangeTo] = rangeEnv
+  ? rangeEnv.split("-").map((value) => Number(value))
+  : [1, Infinity];
+let groupIndex = 0;
+
 async function check(name, fn) {
+  groupIndex += 1;
+  const current = groupIndex;
+  if (current < rangeFrom || current > (rangeTo || Infinity)) return;
   await fn();
   passed++;
-  console.log(`PASS ${passed}: ${name}`);
+  console.log(`PASS ${current}: ${name}`);
 }
 
 function makeCover(width = 256, height = 256) {
@@ -441,4 +456,68 @@ await check("Sanitasi menghapus payload dan mempertahankan dimensi", async () =>
   assert.ok(maxDelta <= 1, `Perubahan pixel harus maksimal 1, dapat ${maxDelta}.`);
 });
 
-console.log(`\n${passed} test groups passed in ${((performance.now() - started) / 1000).toFixed(1)}s.`);
+await check("PNG bit-depth: 8-bit accepted, 16-bit rejected with BIT_DEPTH", async () => {
+  // Bangun PNG minimal dengan IHDR + IDAT valid (zlib) untuk tiap kedalaman.
+  const zlib = require("node:zlib");
+  const CRC_TABLE = (() => {
+    const table = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      table[n] = c >>> 0;
+    }
+    return table;
+  })();
+  const crc32 = (buf) => {
+    let c = 0xffffffff;
+    for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type, data) => {
+    const out = Buffer.alloc(12 + data.length);
+    out.writeUInt32BE(data.length, 0);
+    out.write(type, 4, "ascii");
+    data.copy(out, 8);
+    out.writeUInt32BE(crc32(Buffer.concat([Buffer.from(type, "ascii"), data])), 8 + data.length);
+    return out;
+  };
+  const makePng = (bitDepth, colorType, bytesPerPixel) => {
+    const width = 4;
+    const height = 4;
+    const raw = Buffer.alloc((width * bytesPerPixel + 1) * height);
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(width, 0);
+    ihdr.writeUInt32BE(height, 4);
+    ihdr[8] = bitDepth;
+    ihdr[9] = colorType;
+    return Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      chunk("IHDR", ihdr),
+      chunk("IDAT", zlib.deflateSync(raw)),
+      chunk("IEND", Buffer.alloc(0)),
+    ]);
+  };
+  const toArrayBuffer = (buffer) => buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+
+  const eightBit = toArrayBuffer(makePng(8, 6, 4));
+  const ihdr8 = stego.validatePNGStructure(eightBit);
+  assert.equal(ihdr8.bitDepth, 8);
+  assert.equal(stego.is16BitPng(eightBit), false);
+
+  const sixteenBit = toArrayBuffer(makePng(16, 6, 8));
+  assert.equal(stego.is16BitPng(sixteenBit), true);
+  assert.throws(
+    () => stego.validatePNGStructure(sixteenBit),
+    (error) => error && error.code === "BIT_DEPTH" && /16-bit/.test(error.message)
+  );
+
+  // Kedalaman bukan-8 lain (4-bit palette) tetap ditolak dengan kode sama.
+  const fourBit = toArrayBuffer(makePng(4, 3, 1));
+  assert.throws(
+    () => stego.validatePNGStructure(fourBit),
+    (error) => error && error.code === "BIT_DEPTH"
+  );
+});
+
+const rangeNote = rangeEnv ? ` (range ${rangeFrom}-${rangeTo})` : "";
+console.log(`\n${passed} test groups passed${rangeNote} in ${((performance.now() - started) / 1000).toFixed(1)}s.`);

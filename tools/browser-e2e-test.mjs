@@ -97,6 +97,40 @@ function makeCoverPng(width, height, seed = 1) {
   ]);
 }
 
+/** Membuat PNG RGBA 16-bit bertekstur (tanpa profil warna) untuk uji konversi. */
+function makeCoverPng16Bit(width, height, seed = 1) {
+  const raw = Buffer.alloc((width * 8 + 1) * height);
+  let state = (seed * 2654435761) >>> 0;
+  const rand = () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state;
+  };
+  for (let y = 0; y < height; y++) {
+    const row = y * (width * 8 + 1);
+    raw[row] = 0;
+    for (let x = 0; x < width; x++) {
+      const o = row + 1 + x * 8;
+      const noise = rand() & 0x1f;
+      raw.writeUInt16BE(((x * 3 + y * 2 + noise) * 257) & 0xffff, o);
+      raw.writeUInt16BE(((y * 5 + (x >> 1) + noise) * 257) & 0xffff, o + 2);
+      raw.writeUInt16BE((((x ^ y) * 7 + noise) * 257) & 0xffff, o + 4);
+      raw.writeUInt16BE(0xffff, o + 6);
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 16; // bit depth
+  ihdr[9] = 6; // RGBA
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  return Buffer.concat([
+    signature,
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", zlib.deflateSync(raw)),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
 let passed = 0;
 const failures = [];
 
@@ -262,6 +296,53 @@ async function runFlow(browser, { label, viewport, isMobile, hasTouch, deviceSca
       `Sandi huruf kecil tidak membuka gambar V4.\nHarap: ${message}\nDapat: ${gotLower}`
     );
     await page.click("#open-replace");
+    assert(pageErrors.length === 0, `Ada error halaman: ${pageErrors.join(" | ")}`);
+  } finally {
+    await close();
+  }
+}
+
+/**
+ * PNG 16-bit: di mode Sembunyikan harus dikonversi otomatis ke 8-bit dengan
+ * notice, dan hasilnya tetap dapat dibuka. Di mode Buka harus ditolak dengan
+ * pesan jelas (bukan konversi diam-diam), karena payload hanya ada di PNG 8-bit.
+ */
+async function runBitDepth16Flow(browser, viewport, cover16bitPath, workDir) {
+  const { page, pageErrors, close } = await newPage(browser, viewport);
+  try {
+    const message = `Pesan dari cover 16-bit ${Date.now()}`;
+    await page.click("#tab-hide");
+    await page.setInputFiles("#hide-file", cover16bitPath);
+    await page.waitForSelector("#hide-preview-wrap:not([hidden])", { timeout: 30000 });
+
+    // Notice konversi harus tampil dan menyebut 16-bit.
+    await page.waitForSelector("#bitdepth-notice:not([hidden])", { timeout: 15000 });
+    const notice = await page.textContent("#bitdepth-notice");
+    assert(/16-bit/.test(notice), `Notice konversi tidak menyebut 16-bit: ${notice}`);
+
+    await page.fill("#secret-text", message);
+    await page.fill("#hide-hint", "hint 16-bit");
+    await page.fill("#hide-password", PASSWORD);
+    await page.waitForFunction(() => !document.querySelector("#btn-encrypt").disabled, null, {
+      timeout: 15000,
+    });
+    await page.click("#btn-encrypt");
+    await page.waitForSelector("#hide-result:not([hidden])", { timeout: 120000 });
+    const stegoPath = join(workDir, "stego-from-16bit.png");
+    await downloadResult(page, stegoPath);
+
+    // Hasil konversi harus terbaca kembali seperti biasa.
+    const opened = await openMessage(page, stegoPath, PASSWORD);
+    assert(opened === message, `Dekripsi hasil konversi gagal.\nHarap: ${message}\nDapat: ${opened}`);
+
+    // Membuka PNG 16-bit harus DITOLAK dengan pesan jelas.
+    await page.click("#open-replace");
+    await page.click("#tab-open");
+    await page.setInputFiles("#open-file", cover16bitPath);
+    await page.waitForSelector("#open-error:not([hidden])", { timeout: 60000 });
+    const errorText = await page.textContent("#open-error");
+    assert(/16-bit/.test(errorText), `Pesan tolak 16-bit tidak sesuai: ${errorText}`);
+
     assert(pageErrors.length === 0, `Ada error halaman: ${pageErrors.join(" | ")}`);
   } finally {
     await close();
@@ -556,6 +637,8 @@ async function main() {
   const workDir = await mkdtemp(join(tmpdir(), "cryptopic-e2e-"));
   const coverPath = join(workDir, "cover.png");
   await writeFile(coverPath, makeCoverPng(512, 512, 7));
+  const cover16bitPath = join(workDir, "cover-16bit.png");
+  await writeFile(cover16bitPath, makeCoverPng16Bit(512, 512, 11));
 
   let browser = null;
   if (PROFILE_DIR) {
@@ -598,6 +681,10 @@ async function main() {
       runFlow(browser, mobile, coverPath, workDir, i)
     );
   }
+
+  await step("PNG 16-bit: konversi otomatis saat sembunyikan, ditolak jelas saat buka", () =>
+    runBitDepth16Flow(browser, desktop.viewport, cover16bitPath, workDir)
+  );
 
   await step("Gunakan Lagi: gambar lama dibersihkan lalu dipakai untuk pesan baru", () =>
     runReuseFlow(browser, desktop.viewport, coverPath, workDir)

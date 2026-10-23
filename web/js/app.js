@@ -12,6 +12,8 @@ import {
   pngRejectMessage,
   loadImageFromFile,
   imageToImageData,
+  is16BitPng,
+  convertTo8BitPngBlob,
   maxMessageBytes,
   embedPayload,
   extractPayload,
@@ -329,9 +331,27 @@ async function handleHideFile(file) {
   }
   try {
     const bytes = await readFileBytes(file);
-    validatePNGStructure(bytes);
-    const img = await loadImageFromFile(file);
-    const { imageData, hasTransparency } = imageToImageData(img);
+    // Deteksi 16-bit lebih dulu: validatePNGStructure memang menolak 16-bit,
+    // tetapi di mode sembunyikan kita justru ingin mengonversinya.
+    const needsConversion = is16BitPng(bytes);
+    let sourceFile = file;
+    let convertedBlob = null;
+    let convertedHasTransparency = false;
+    if (needsConversion) {
+      // PNG 16-bit tidak dapat dipakai langsung (kanvas hanya 8-bit). Konversi ke
+      // PNG 8-bit: hasil unduhan memang berkas baru, jadi wajar untuk memberi tahu.
+      const converted = await convertTo8BitPngBlob(file);
+      convertedBlob = converted.blob;
+      convertedHasTransparency = converted.hasTransparency;
+      sourceFile = convertedBlob;
+    } else {
+      // Selain 16-bit, format tak didukung tetap harus ditolak (iCCP, bit depth lain).
+      validatePNGStructure(bytes);
+    }
+    const img = await loadImageFromFile(sourceFile);
+    const { imageData, hasTransparency: sourceTransparency } = imageToImageData(img);
+    // Konversi meratakan alpha, jadi pakai hasil deteksi dari gambar asli.
+    const hasTransparency = needsConversion ? convertedHasTransparency : sourceTransparency;
     hideState.img = img;
     hideState.imageData = imageData;
     hideState.hasTransparency = hasTransparency;
@@ -339,12 +359,15 @@ async function handleHideFile(file) {
     hideState.height = img.naturalHeight;
     hideState.fileName = file.name;
     if (hidePreviewUrl) URL.revokeObjectURL(hidePreviewUrl);
-    hidePreviewUrl = URL.createObjectURL(file);
+    // Pratinjau memakai berkas 8-bit hasil konversi agar sesuai dengan hasil nyata.
+    hidePreviewUrl = URL.createObjectURL(sourceFile);
     $("hide-preview-img").src = hidePreviewUrl;
     $("hide-file-name").textContent = file.name;
     $("hide-file-dims").textContent = `${img.naturalWidth}×${img.naturalHeight}px`;
     $("hide-capacity").textContent = `Kapasitas pesan maks. ${formatBytes(maxMessageBytes(img.naturalWidth, img.naturalHeight, $("hide-hint").value.trim()))}`;
     $("transparency-notice").hidden = !hasTransparency;
+    $("bitdepth-notice").hidden = !needsConversion;
+    if (convertedBlob) showToast("Gambar 16-bit dikonversi ke PNG 8-bit.", "warn", 5000);
     $("hide-drop").hidden = true;
     $("hide-preview-wrap").hidden = false;
     $("hide-result").hidden = true;
@@ -375,6 +398,7 @@ function resetHideImage() {
   $("hide-result").hidden = true;
   $("btn-download").hidden = true;
   $("transparency-notice").hidden = true;
+  $("bitdepth-notice").hidden = true;
   updateHideUi();
 }
 
@@ -472,6 +496,15 @@ async function handleOpenFile(file) {
 
   try {
     const bytes = await readFileBytes(file);
+    // 16-bit ditolak dengan pesan khusus: pesan CryptoPic hanya ada di PNG 8-bit,
+    // jadi gambar 16-bit tidak mungkin berisi payload. Jangan konversi diam-diam.
+    if (is16BitPng(bytes)) {
+      throw new StegoError(
+        "BIT_DEPTH",
+        "PNG ini 16-bit per channel. Pesan CryptoPic hanya ditulis pada PNG 8-bit, jadi gambar ini tidak mungkin berisi " +
+          "pesan CryptoPic. Minta pengirim menyimpan ulang gambar hasil sebagai PNG 8-bit."
+      );
+    }
     validatePNGStructure(bytes);
     const img = await loadImageFromFile(file);
     const { imageData } = imageToImageData(img);
