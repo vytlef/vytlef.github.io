@@ -84,6 +84,77 @@ function requireArgon2() {
   return argon2id;
 }
 
+/**
+ * Batas tunggu satu perhitungan Argon2id di worker. Worker bisa berhenti
+ * merespons tanpa memicu onerror (mis. gagal memuat skrip secara transien atau
+ * kehabisan memori). Tanpa batas ini UI akan berputar selamanya; dengan batas
+ * ini pengguna mendapat pesan jelas dan dapat mencoba lagi.
+ */
+const KDF_WORKER_TIMEOUT_MS = 45000;
+
+function runArgon2Worker(password, salt, kdf) {
+  return new Promise((resolve, reject) => {
+    let worker;
+    try {
+      worker = new Worker(new URL("./argon2-worker.js", import.meta.url), { name: "cryptopic-argon2" });
+    } catch (error) {
+      reject(new CryptoPicError("CRYPTO_UNAVAILABLE", `Tidak dapat memulai worker Argon2id: ${error.message}`));
+      return;
+    }
+
+    let settled = false;
+    let timer = null;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clearTimeout(timer);
+      try {
+        worker.terminate();
+      } catch {
+        /* worker mungkin sudah mati */
+      }
+      callback(value);
+    };
+
+    worker.onmessage = (event) => {
+      if (event.data && event.data.error) {
+        finish(reject, new CryptoPicError("KDF_FAILED", event.data.error));
+      } else if (event.data && event.data.root instanceof ArrayBuffer) {
+        finish(resolve, new Uint8Array(event.data.root));
+      } else {
+        finish(reject, new CryptoPicError("KDF_FAILED", "Worker Argon2id mengembalikan hasil yang tidak valid."));
+      }
+    };
+    worker.onerror = (event) => {
+      event.preventDefault();
+      finish(reject, new CryptoPicError("KDF_FAILED", "Worker Argon2id gagal. Muat ulang aplikasi dan coba lagi."));
+    };
+
+    timer = setTimeout(() => {
+      finish(
+        reject,
+        new CryptoPicError(
+          "KDF_TIMEOUT",
+          "Perhitungan Argon2id terlalu lama karena worker tidak merespons. Coba lagi; bila tetap gagal, muat ulang halaman."
+        )
+      );
+    }, KDF_WORKER_TIMEOUT_MS);
+
+    const passwordCopy = new Uint8Array(password);
+    const saltCopy = new Uint8Array(salt);
+    worker.postMessage(
+      {
+        password: passwordCopy,
+        salt: saltCopy,
+        iterations: kdf.iterations,
+        parallelism: kdf.parallelism,
+        memorySize: kdf.memorySize,
+      },
+      [passwordCopy.buffer, saltCopy.buffer]
+    );
+  });
+}
+
 function deriveArgon2Root(password, salt, kdf) {
   if (import.meta.url.startsWith("data:")) {
     return requireArgon2()({
@@ -101,45 +172,16 @@ function deriveArgon2Root(password, salt, kdf) {
     throw new CryptoPicError("CRYPTO_UNAVAILABLE", "Browser ini tidak mendukung Web Worker yang diperlukan untuk menjalankan Argon2id.");
   }
 
-  return new Promise((resolve, reject) => {
-    let worker;
-    try {
-      worker = new Worker(new URL("./argon2-worker.js", import.meta.url), { name: "cryptopic-argon2" });
-    } catch (error) {
-      reject(new CryptoPicError("CRYPTO_UNAVAILABLE", `Tidak dapat memulai worker Argon2id: ${error.message}`));
-      return;
+  // Satu percobaan ulang dengan worker baru. Argon2id deterministik, jadi
+  // pengulangan tidak mengubah hasil dan aman; ini menyembuhkan kegagalan
+  // startup worker yang bersifat sesaat tanpa menyembunyikan kesalahan nyata.
+  const attempt = () => runArgon2Worker(password, salt, kdf);
+  return attempt().catch((error) => {
+    if (error instanceof CryptoPicError && (error.code === "KDF_TIMEOUT" || error.code === "KDF_FAILED")) {
+      console.warn("Worker Argon2id gagal atau tidak merespons; mencoba ulang sekali.", error);
+      return attempt();
     }
-
-    const finish = (callback, value) => {
-      worker.terminate();
-      callback(value);
-    };
-    worker.onmessage = (event) => {
-      if (event.data && event.data.error) {
-        finish(reject, new CryptoPicError("KDF_FAILED", event.data.error));
-      } else if (event.data && event.data.root instanceof ArrayBuffer) {
-        finish(resolve, new Uint8Array(event.data.root));
-      } else {
-        finish(reject, new CryptoPicError("KDF_FAILED", "Worker Argon2id mengembalikan hasil yang tidak valid."));
-      }
-    };
-    worker.onerror = (event) => {
-      event.preventDefault();
-      finish(reject, new CryptoPicError("KDF_FAILED", "Worker Argon2id gagal. Muat ulang aplikasi dan coba lagi."));
-    };
-
-    const passwordCopy = new Uint8Array(password);
-    const saltCopy = new Uint8Array(salt);
-    worker.postMessage(
-      {
-        password: passwordCopy,
-        salt: saltCopy,
-        iterations: kdf.iterations,
-        parallelism: kdf.parallelism,
-        memorySize: kdf.memorySize,
-      },
-      [passwordCopy.buffer, saltCopy.buffer]
-    );
+    throw error;
   });
 }
 
