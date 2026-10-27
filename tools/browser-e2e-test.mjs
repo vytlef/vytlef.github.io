@@ -21,7 +21,7 @@
  *   RUNS                jumlah iterasi per mode (default 5)
  */
 import { chromium } from "playwright-core";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import zlib from "node:zlib";
@@ -304,8 +304,9 @@ async function runFlow(browser, { label, viewport, isMobile, hasTouch, deviceSca
 
 /**
  * PNG 16-bit: di mode Sembunyikan harus dikonversi otomatis ke 8-bit dengan
- * notice, dan hasilnya tetap dapat dibuka. Di mode Buka harus ditolak dengan
- * pesan jelas (bukan konversi diam-diam), karena payload hanya ada di PNG 8-bit.
+ * penanda "16-bit → 8-bit" di metadata pratinjau, dan hasilnya tetap dapat
+ * dibuka. Di mode Buka harus ditolak dengan pesan jelas (bukan konversi
+ * diam-diam), karena payload hanya ada di PNG 8-bit.
  */
 async function runBitDepth16Flow(browser, viewport, cover16bitPath, workDir) {
   const { page, pageErrors, close } = await newPage(browser, viewport);
@@ -315,10 +316,14 @@ async function runBitDepth16Flow(browser, viewport, cover16bitPath, workDir) {
     await page.setInputFiles("#hide-file", cover16bitPath);
     await page.waitForSelector("#hide-preview-wrap:not([hidden])", { timeout: 30000 });
 
-    // Notice konversi harus tampil dan menyebut 16-bit.
-    await page.waitForSelector("#bitdepth-notice:not([hidden])", { timeout: 15000 });
-    const notice = await page.textContent("#bitdepth-notice");
-    assert(/16-bit/.test(notice), `Notice konversi tidak menyebut 16-bit: ${notice}`);
+    // Penanda konversi harus tampil di metadata pratinjau dan menyebut 16-bit.
+    await page.waitForFunction(
+      () => /16-bit/.test(document.querySelector("#hide-file-dims").textContent),
+      null,
+      { timeout: 15000 }
+    );
+    const dims = await page.textContent("#hide-file-dims");
+    assert(/16-bit\s*→\s*8-bit/.test(dims), `Penanda konversi tidak menyebut 16-bit: ${dims}`);
 
     await page.fill("#secret-text", message);
     await page.fill("#hide-hint", "hint 16-bit");
@@ -343,6 +348,313 @@ async function runBitDepth16Flow(browser, viewport, cover16bitPath, workDir) {
     const errorText = await page.textContent("#open-error");
     assert(/16-bit/.test(errorText), `Pesan tolak 16-bit tidak sesuai: ${errorText}`);
 
+    assert(pageErrors.length === 0, `Ada error halaman: ${pageErrors.join(" | ")}`);
+  } finally {
+    await close();
+  }
+}
+
+/**
+ * Format asing (JPEG/WebP): dibuat lewat kanvas Chromium (tanpa encoder Node),
+ * lalu diuji: konversi otomatis ke PNG 8-bit, hasil bisa dibuka, dan mode Buka
+ * menolak format asing dengan pesan jelas.
+ */
+async function writeCanvasFixture(page, outPath, mime, quality, width, height, seed) {
+  const base64 = await page.evaluate(
+    ({ mime, quality, width, height, seed }) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      const image = ctx.createImageData(width, height);
+      let state = (seed * 2654435761) >>> 0;
+      const rand = () => {
+        state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+        return state;
+      };
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const o = (y * width + x) * 4;
+          const noise = rand() & 0x1f;
+          image.data[o] = (x * 3 + y * 2 + noise) & 0xff;
+          image.data[o + 1] = (y * 5 + (x >> 1) + noise) & 0xff;
+          image.data[o + 2] = ((x ^ y) * 7 + noise) & 0xff;
+          image.data[o + 3] = 255;
+        }
+      }
+      ctx.putImageData(image, 0, 0);
+      return canvas.toDataURL(mime, quality).split(",")[1];
+    },
+    { mime, quality, width, height, seed }
+  );
+  assert(base64, `Browser tidak bisa mengenkode ${mime}.`);
+  await writeFile(outPath, Buffer.from(base64, "base64"));
+}
+
+async function runForeignFormatFlow(browser, viewport, workDir) {
+  const { page, pageErrors, close } = await newPage(browser, viewport);
+  try {
+    const cases = [
+      {
+        name: "JPEG",
+        path: join(workDir, "cover.jpg"),
+        mime: "image/jpeg",
+        quality: 0.92,
+        marker: /JPEG\s*→\s*PNG 8-bit/,
+      },
+      {
+        name: "WebP",
+        path: join(workDir, "cover.webp"),
+        mime: "image/webp",
+        quality: 0.95,
+        marker: /WebP\s*→\s*PNG 8-bit/,
+      },
+    ];
+
+    for (const item of cases) {
+      await writeCanvasFixture(page, item.path, item.mime, item.quality, 640, 480, 99);
+      const message = `Pesan ${item.name} → PNG ${Date.now()}`;
+
+      await page.click("#tab-hide");
+      await page.setInputFiles("#hide-file", item.path);
+      await page.waitForSelector("#hide-preview-wrap:not([hidden])", { timeout: 30000 });
+      const dims = await page.textContent("#hide-file-dims");
+      assert(item.marker.test(dims), `Penanda konversi ${item.name} tidak muncul: ${dims}`);
+
+      await page.fill("#secret-text", message);
+      await page.fill("#hide-hint", `hint ${item.name}`);
+      await page.fill("#hide-password", PASSWORD);
+      await page.waitForFunction(() => !document.querySelector("#btn-encrypt").disabled, null, {
+        timeout: 15000,
+      });
+      await page.click("#btn-encrypt");
+      await page.waitForSelector("#hide-result:not([hidden])", { timeout: 120000 });
+
+      const stegoPath = join(workDir, `stego-from-${item.name.toLowerCase()}.png`);
+      await downloadResult(page, stegoPath);
+
+      // Hasil wajib PNG (signature IEND tetap PNG apa pun format masuknya).
+      const bytes = await readFile(stegoPath);
+      assert(
+        bytes.length > 8 &&
+          bytes[0] === 0x89 &&
+          bytes[1] === 0x50 &&
+          bytes[2] === 0x4e &&
+          bytes[3] === 0x47,
+        `Hasil konversi ${item.name} bukan PNG.`
+      );
+
+      const opened = await openMessage(page, stegoPath, PASSWORD);
+      assert(
+        opened === message,
+        `Dekripsi hasil ${item.name} gagal.\nHarap: ${message}\nDapat: ${opened}`
+      );
+
+      // Mode Buka hanya menerima PNG: format asing harus ditolak.
+      await page.click("#open-replace");
+      await page.setInputFiles("#open-file", item.path);
+      await page.waitForSelector("#toast-container .toast.error", { timeout: 15000 });
+      const toast = await page.textContent("#toast-container .toast.error");
+      assert(
+        /selalu PNG/i.test(toast),
+        `Pesan tolak mode Buka untuk ${item.name} tidak sesuai: ${toast}`
+      );
+      await page.evaluate(() =>
+        document.querySelectorAll("#toast-container .toast").forEach((toast) => toast.remove())
+      );
+    }
+
+    assert(pageErrors.length === 0, `Ada error halaman: ${pageErrors.join(" | ")}`);
+  } finally {
+    await close();
+  }
+}
+
+/**
+ * Teks & tata letak: placeholder sandi, label petunjuk, footer, subjudul daftar
+ * buka, catatan unggah, hilangnya callout lama, tagline privasi yang selalu
+ * center, dan label risiko deteksi yang seragam serta selalu center (desktop,
+ * mobile, dan setelah resize).
+ */
+async function runUiTextFlow(browser, viewport, options, coverPath, label) {
+  const { page, pageErrors, close } = await newPage(browser, viewport, options);
+  try {
+    const placeholder = await page.getAttribute("#hide-password", "placeholder");
+    assert(
+      placeholder === "Contoh sandi: %uY(/<mN#^#1L`N",
+      `Placeholder sandi salah: ${placeholder}`
+    );
+
+    const hintLabel = await page.evaluate(() =>
+      document.querySelector("#hide-hint").closest("label").querySelector(".field-label").textContent.trim()
+    );
+    assert(hintLabel === "Petunjuk", `Label petunjuk harus "Petunjuk": ${hintLabel}`);
+
+    const hintFoot = await page.evaluate(() =>
+      document.querySelector("#hide-hint").closest("label").querySelector(".field-hint").textContent.trim()
+    );
+    assert(
+      hintFoot === "Terlihat sebelum sandi dimasukkan. Jangan tulis sandi di sini.",
+      `Keterangan petunjuk salah: ${hintFoot}`
+    );
+
+    const footer = (await page.textContent(".app-footer p")).trim();
+    assert(
+      footer === "CryptoPic — Lindungi Privasi Anda,Tanpa Server,Tanpa Akun,Semua Ditangan Anda",
+      `Footer salah: ${footer}`
+    );
+
+    assert((await page.$("#open-start-note")) === null, "Callout #open-start-note masih ada");
+
+    const openSubtitle = (await page.textContent("#view-open .card-sub")).trim();
+    assert(
+      openSubtitle === "Unggah Gambar PNG, Masukkan Kata Sandi, Berdasarkan Hint/Petunjuk.",
+      `Subjudul buka salah: ${openSubtitle}`
+    );
+
+    const uploadNote = (await page.textContent("#open-drop .upload-note")).replace(/\s+/g, " ").trim();
+    assert(
+      uploadNote === "Hanya gambar PNG asli hasil CryptoPic. Format Lain Tidak Didukung.",
+      `Catatan unggah salah: ${uploadNote}`
+    );
+
+    // Tampilkan meter risiko dengan gambar + pesan kecil (rasio rendah).
+    await page.click("#tab-hide");
+    await page.setInputFiles("#hide-file", coverPath);
+    await page.waitForSelector("#hide-preview-wrap:not([hidden])", { timeout: 30000 });
+    await page.fill("#secret-text", "pesan kecil");
+    await page.waitForSelector("#stealth-meter:not([hidden])", { timeout: 15000 });
+    const stealthText = (await page.textContent("#stealth-label")).trim();
+    assert(stealthText === "Resiko Terdeteksi: Rendah", `Label risiko salah: ${stealthText}`);
+
+    const layout = () =>
+      page.evaluate(() => {
+        const stealth = document.querySelector("#stealth-label");
+        const tagline = document.querySelector(".privacy-tagline");
+        const card = tagline.closest(".card");
+        const tagRect = tagline.getBoundingClientRect();
+        const cardRect = card.getBoundingClientRect();
+        const cardStyle = getComputedStyle(card);
+        const padLeft = parseFloat(cardStyle.paddingLeft);
+        const padRight = parseFloat(cardStyle.paddingRight);
+        const contentCenter = cardRect.left + padLeft + (cardRect.width - padLeft - padRight) / 2;
+        const tagCenter = tagRect.left + tagRect.width / 2;
+        const header = document.querySelector(".header-inner");
+        const headerRect = header.getBoundingClientRect();
+        const headerStyle = getComputedStyle(header);
+        const headerRight = headerRect.right - parseFloat(headerStyle.paddingRight);
+        const toggleRect = document.querySelector("#theme-toggle").getBoundingClientRect();
+        const brandRect = document.querySelector(".brand").getBoundingClientRect();
+        return {
+          align: getComputedStyle(stealth).textAlign,
+          taglineAlign: getComputedStyle(tagline).textAlign,
+          taglineCenterDelta: Math.abs(tagCenter - contentCenter),
+          taglineText: tagline.textContent.replace(/\s+/g, " ").trim(),
+          toggleRightDelta: Math.abs(toggleRect.right - headerRight),
+          toggleBrandGap: toggleRect.left - brandRect.right,
+          overflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+        };
+      });
+
+    let check = await layout();
+    assert(check.align === "center", `Label risiko tidak center (${label}): ${check.align}`);
+    assert(!check.overflow, `Ada overflow horizontal (${label})`);
+    assert(
+      check.taglineText ===
+        "No Server, No Database, Just Run On your Device, We Respect Your Privacy",
+      `Teks tagline privasi salah: ${check.taglineText}`
+    );
+    assert(
+      check.taglineAlign === "center",
+      `Tagline privasi tidak center (${label}): ${check.taglineAlign}`
+    );
+    assert(
+      check.taglineCenterDelta <= 1.5,
+      `Tagline privasi tidak di tengah kartu (${label}): selisih ${check.taglineCenterDelta}px`
+    );
+    assert(
+      check.toggleRightDelta <= 1.5,
+      `Tombol tema tidak menempel di ujung kanan header (${label}): selisih ${check.toggleRightDelta}px`
+    );
+    assert(
+      check.toggleBrandGap >= 24,
+      `Tombol tema terlalu dekat dengan logo (${label}): jarak ${check.toggleBrandGap}px`
+    );
+
+    // Simulasi layar digeser/diperkecil: tetap center dan tanpa overflow.
+    await page.setViewportSize({
+      width: Math.max(280, viewport.width - 120),
+      height: viewport.height,
+    });
+    await page.waitForTimeout(150);
+    check = await layout();
+    assert(check.align === "center", `Label risiko tidak center setelah resize (${label})`);
+    assert(!check.overflow, `Ada overflow horizontal setelah resize (${label})`);
+    assert(
+      check.taglineAlign === "center",
+      `Tagline privasi tidak center setelah resize (${label}): ${check.taglineAlign}`
+    );
+    assert(
+      check.taglineCenterDelta <= 1.5,
+      `Tagline privasi tidak di tengah kartu setelah resize (${label}): selisih ${check.taglineCenterDelta}px`
+    );
+    assert(
+      check.toggleRightDelta <= 1.5,
+      `Tombol tema tidak di ujung kanan header setelah resize (${label}): selisih ${check.toggleRightDelta}px`
+    );
+    assert(
+      check.toggleBrandGap >= 24,
+      `Tombol tema terlalu dekat dengan logo setelah resize (${label}): jarak ${check.toggleBrandGap}px`
+    );
+
+    assert(pageErrors.length === 0, `Ada error halaman: ${pageErrors.join(" | ")}`);
+  } finally {
+    await close();
+  }
+}
+
+/**
+ * Sandi lemah (di bawah 8 karakter) harus tetap bisa dipakai, tetapi tombol
+ * enkripsi baru aktif setelah gambar, pesan, sandi, dan petunjuk terisi.
+ */
+async function runWeakPasswordFlow(browser, viewport, coverPath, workDir) {
+  const { page, pageErrors, close } = await newPage(browser, viewport);
+  try {
+    const message = `Pesan sandi lemah ${Date.now()}`;
+    await page.click("#tab-hide");
+    await page.setInputFiles("#hide-file", coverPath);
+    await page.waitForSelector("#hide-preview-wrap:not([hidden])", { timeout: 30000 });
+
+    const isDisabled = () => page.evaluate(() => document.querySelector("#btn-encrypt").disabled);
+    assert(await isDisabled(), "Tombol enkripsi harus disabled sebelum pesan diisi");
+
+    await page.fill("#secret-text", message);
+    assert(await isDisabled(), "Tombol enkripsi harus disabled tanpa sandi dan petunjuk");
+
+    await page.fill("#hide-password", "abc");
+    assert(await isDisabled(), "Tombol enkripsi harus disabled saat petunjuk kosong");
+
+    const strength = (await page.textContent("#pw-strength-label")).trim();
+    assert(
+      strength === "Terlalu Lemah, Sandi Dapat Ditembus Dengan Cepat",
+      `Label kekuatan sandi lemah salah: ${strength}`
+    );
+
+    await page.fill("#hide-hint", "petunjuk untuk sandi lemah");
+    await page.waitForFunction(() => !document.querySelector("#btn-encrypt").disabled, null, {
+      timeout: 15000,
+    });
+
+    await page.click("#btn-encrypt");
+    await page.waitForSelector("#hide-result:not([hidden])", { timeout: 120000 });
+    const stegoPath = join(workDir, "stego-weak-password.png");
+    await downloadResult(page, stegoPath);
+
+    const opened = await openMessage(page, stegoPath, "abc");
+    assert(
+      opened === message,
+      `Sandi lemah gagal membuka pesan.\nHarap: ${message}\nDapat: ${opened}`
+    );
     assert(pageErrors.length === 0, `Ada error halaman: ${pageErrors.join(" | ")}`);
   } finally {
     await close();
@@ -684,6 +996,28 @@ async function main() {
 
   await step("PNG 16-bit: konversi otomatis saat sembunyikan, ditolak jelas saat buka", () =>
     runBitDepth16Flow(browser, desktop.viewport, cover16bitPath, workDir)
+  );
+
+  await step("Teks & label risiko: desktop, center dan tanpa overflow", () =>
+    runUiTextFlow(browser, desktop.viewport, {}, coverPath, "desktop")
+  );
+
+  await step("Teks & label risiko: mobile, center dan tanpa overflow", () =>
+    runUiTextFlow(
+      browser,
+      mobile.viewport,
+      { isMobile: true, hasTouch: true, deviceScaleFactor: 3 },
+      coverPath,
+      "mobile"
+    )
+  );
+
+  await step("Sandi lemah + petunjuk wajib: enkripsi dan buka kembali", () =>
+    runWeakPasswordFlow(browser, desktop.viewport, coverPath, workDir)
+  );
+
+  await step("Format asing (JPEG/WebP): konversi ke PNG, bisa dibuka, mode Buka menolak", () =>
+    runForeignFormatFlow(browser, desktop.viewport, workDir)
   );
 
   await step("Gunakan Lagi: gambar lama dibersihkan lalu dipakai untuk pesan baru", () =>

@@ -10,10 +10,14 @@ import {
   validatePNGStructure,
   readFileBytes,
   pngRejectMessage,
+  imageImportRejectMessage,
+  isSupportedImageFile,
+  detectImportFormat,
+  readPngInfo,
+  prepareImageForEmbedding,
   loadImageFromFile,
   imageToImageData,
   is16BitPng,
-  convertTo8BitPngBlob,
   maxMessageBytes,
   embedPayload,
   extractPayload,
@@ -239,15 +243,12 @@ function estimatePasswordStrength(password) {
   else if (score >= 40) level = "fair";
 
   let label;
-  if (password.length < 8) {
-    label = "Terlalu pendek — minimal 8 karakter (disarankan 12+ atau 4 kata acak).";
-    level = "weak";
-  } else if (level === "good") {
+  if (level === "good") {
     label = "Kuat.";
   } else if (level === "fair") {
     label = "Cukup — pertimbangkan frasa yang lebih panjang.";
   } else {
-    label = "Lemah — tambah panjang atau variasikan karakter.";
+    label = "Terlalu Lemah, Sandi Dapat Ditembus Dengan Cepat";
   }
   return { score, level, label };
 }
@@ -281,13 +282,13 @@ function updateStealthMeter(bytes, avail) {
   let level, text;
   if (ratio <= 0.1) {
     level = "low";
-    text = "Risiko deteksi: rendah (pemakaian kapasitas kecil).";
+    text = "Resiko Terdeteksi: Rendah";
   } else if (ratio <= 0.3) {
     level = "medium";
-    text = "Risiko deteksi: sedang. Semakin besar pesan, semakin mudah dianalisis.";
+    text = "Resiko Terdeteksi: Sedang";
   } else {
     level = "high";
-    text = "Risiko deteksi: tinggi. Pesan besar lebih mudah terdeteksi steganalisis; gunakan gambar lebih besar atau pesan lebih pendek.";
+    text = "Resiko Terdeteksi: Tinggi";
   }
   meter.hidden = false;
   meter.dataset.level = level;
@@ -319,55 +320,65 @@ function updateHideUi() {
   $("hint-visibility-warning").hidden = !$("hide-hint").value.trim();
 
   const password = $("hide-password").value;
+  const hint = $("hide-hint").value.trim();
   const canEncrypt =
-    !!hideState.img && secret.trim().length > 0 && password.length >= 8 && bytes <= avail;
+    !!hideState.img &&
+    secret.trim().length > 0 &&
+    password.length > 0 &&
+    hint.length > 0 &&
+    bytes <= avail;
   $("btn-encrypt").disabled = !canEncrypt;
 }
 
+function conversionMarker(format, pngInfo) {
+  if (!format) return "";
+  if (format.label !== "PNG") return `${format.label} → PNG 8-bit`;
+  if (!pngInfo) return "";
+  const parts = [];
+  if (pngInfo.bitDepth !== 8) parts.push(`${pngInfo.bitDepth}-bit`);
+  if (pngInfo.hasIccp) parts.push("ICC");
+  if (parts.length === 0) return "";
+  return pngInfo.hasIccp ? `${parts.join(" + ")} → sRGB 8-bit` : `${parts.join(" + ")} → 8-bit`;
+}
+
+async function readPngInfoSafe(file) {
+  try {
+    return readPngInfo(await readFileBytes(file));
+  } catch {
+    return null;
+  }
+}
+
 async function handleHideFile(file) {
-  if (!validatePNGFile(file)) {
-    showToast(pngRejectMessage(file), "error", 6000);
+  if (!isSupportedImageFile(file)) {
+    showToast(imageImportRejectMessage(file), "error", 6000);
     return;
   }
   try {
-    const bytes = await readFileBytes(file);
-    // Deteksi 16-bit lebih dulu: validatePNGStructure memang menolak 16-bit,
-    // tetapi di mode sembunyikan kita justru ingin mengonversinya.
-    const needsConversion = is16BitPng(bytes);
-    let sourceFile = file;
-    let convertedBlob = null;
-    let convertedHasTransparency = false;
-    if (needsConversion) {
-      // PNG 16-bit tidak dapat dipakai langsung (kanvas hanya 8-bit). Konversi ke
-      // PNG 8-bit: hasil unduhan memang berkas baru, jadi wajar untuk memberi tahu.
-      const converted = await convertTo8BitPngBlob(file);
-      convertedBlob = converted.blob;
-      convertedHasTransparency = converted.hasTransparency;
-      sourceFile = convertedBlob;
-    } else {
-      // Selain 16-bit, format tak didukung tetap harus ditolak (iCCP, bit depth lain).
-      validatePNGStructure(bytes);
-    }
-    const img = await loadImageFromFile(sourceFile);
-    const { imageData, hasTransparency: sourceTransparency } = imageToImageData(img);
-    // Konversi meratakan alpha, jadi pakai hasil deteksi dari gambar asli.
-    const hasTransparency = needsConversion ? convertedHasTransparency : sourceTransparency;
-    hideState.img = img;
-    hideState.imageData = imageData;
-    hideState.hasTransparency = hasTransparency;
-    hideState.width = img.naturalWidth;
-    hideState.height = img.naturalHeight;
+    const format = detectImportFormat(file);
+    // Label konversi butuh info IHDR PNG (kedalaman/ICC). Format lain cukup
+    // didekode lewat kanvas tanpa membaca seluruh byte di JS.
+    const pngInfo = format && format.label === "PNG" ? await readPngInfoSafe(file) : null;
+
+    // Semua input dinormalisasi ke PNG 8-bit SEBELUM payload disisipkan.
+    const prepared = await prepareImageForEmbedding(file);
+
+    hideState.img = prepared.img;
+    hideState.imageData = prepared.imageData;
+    hideState.hasTransparency = prepared.hasTransparency;
+    hideState.width = prepared.width;
+    hideState.height = prepared.height;
     hideState.fileName = file.name;
     if (hidePreviewUrl) URL.revokeObjectURL(hidePreviewUrl);
-    // Pratinjau memakai berkas 8-bit hasil konversi agar sesuai dengan hasil nyata.
-    hidePreviewUrl = URL.createObjectURL(sourceFile);
+    // Pratinjau memakai berkas PNG hasil normalisasi, sesuai hasil nyata.
+    hidePreviewUrl = URL.createObjectURL(prepared.blob);
     $("hide-preview-img").src = hidePreviewUrl;
     $("hide-file-name").textContent = file.name;
-    $("hide-file-dims").textContent = `${img.naturalWidth}×${img.naturalHeight}px`;
-    $("hide-capacity").textContent = `Kapasitas pesan maks. ${formatBytes(maxMessageBytes(img.naturalWidth, img.naturalHeight, $("hide-hint").value.trim()))}`;
-    $("transparency-notice").hidden = !hasTransparency;
-    $("bitdepth-notice").hidden = !needsConversion;
-    if (convertedBlob) showToast("Gambar 16-bit dikonversi ke PNG 8-bit.", "warn", 5000);
+    const dims = `${prepared.width}×${prepared.height}px`;
+    const marker = conversionMarker(format, pngInfo);
+    $("hide-file-dims").textContent = marker ? `${dims} · ${marker}` : dims;
+    $("hide-capacity").textContent = `Kapasitas pesan maks. ${formatBytes(maxMessageBytes(prepared.width, prepared.height, $("hide-hint").value.trim()))}`;
+    $("transparency-notice").hidden = !prepared.hasTransparency;
     $("hide-drop").hidden = true;
     $("hide-preview-wrap").hidden = false;
     $("hide-result").hidden = true;
@@ -398,7 +409,6 @@ function resetHideImage() {
   $("hide-result").hidden = true;
   $("btn-download").hidden = true;
   $("transparency-notice").hidden = true;
-  $("bitdepth-notice").hidden = true;
   updateHideUi();
 }
 
@@ -408,7 +418,7 @@ async function doEncrypt() {
   const password = $("hide-password").value;
   const hint = $("hide-hint").value.trim();
 
-  if (!hideState.img || !secret.trim() || !password) return;
+  if (!hideState.img || !secret.trim() || !password || !hint) return;
 
   const status = $("hide-status");
   status.hidden = false;
@@ -471,7 +481,6 @@ function resetOpen() {
   $("open-preview-img").removeAttribute("src");
   $("open-drop").hidden = false;
   $("open-preview-wrap").hidden = true;
-  $("open-start-note").hidden = false;
   $("open-hint-box").hidden = true;
   $("open-password-field").hidden = true;
   $("open-password").value = "";
@@ -488,7 +497,6 @@ async function handleOpenFile(file) {
     showToast(pngRejectMessage(file), "error", 6000);
     return;
   }
-  $("open-start-note").hidden = true;
   const status = $("open-status");
   status.hidden = false;
   status.classList.remove("error");

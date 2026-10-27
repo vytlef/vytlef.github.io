@@ -30,9 +30,52 @@ export function validatePNGFile(file) {
   return /\.png$/i.test(file.name || "");
 }
 
+/**
+ * Format raster yang boleh diimpor ke mode Sembunyikan. Semua format di sini
+ * dinormalisasi ke PNG 8-bit sebelum payload disisipkan, jadi tidak ada
+ * ketergantungan pada format asli.
+ */
+const IMPORT_FORMATS = [
+  { label: "PNG", mimes: ["image/png", "image/x-png"], ext: /\.png$/i },
+  { label: "JPEG", mimes: ["image/jpeg", "image/jpg", "image/pjpeg"], ext: /\.jpe?g$/i },
+  { label: "WebP", mimes: ["image/webp"], ext: /\.webp$/i },
+  { label: "GIF", mimes: ["image/gif"], ext: /\.gif$/i },
+  { label: "BMP", mimes: ["image/bmp", "image/x-ms-bmp"], ext: /\.bmp$/i },
+  { label: "AVIF", mimes: ["image/avif"], ext: /\.avif$/i },
+];
+
+/** Batas aman agar decode/konversi gambar raksasa tidak menghabiskan memori. */
+export const MAX_IMPORT_PIXELS = 64_000_000;
+export const MAX_IMPORT_SIDE = 16384;
+
+export function detectImportFormat(file) {
+  if (!file) return null;
+  const type = String(file.type || "").toLowerCase();
+  if (type) {
+    const byMime = IMPORT_FORMATS.find((format) => format.mimes.includes(type));
+    if (byMime) return byMime;
+    // MIME gambar yang eksplisit tapi tidak didukung (mis. SVG/TIFF) jangan
+    // ditebak dari ekstensi: SVG bisa berisi konten aktif.
+    if (type.startsWith("image/")) return null;
+  }
+  return IMPORT_FORMATS.find((format) => format.ext.test(file.name || "")) || null;
+}
+
+export function isSupportedImageFile(file) {
+  return !!detectImportFormat(file);
+}
+
+export function imageImportRejectMessage(file) {
+  const shown = file && file.name ? `"${file.name}"` : "File tersebut";
+  return (
+    `${shown} ditolak. Format yang didukung: PNG, JPEG, WebP, GIF, BMP, dan AVIF. ` +
+    "SVG, TIFF, dan HEIC belum didukung. Semua format dikonversi otomatis, dan hasil enkripsi selalu PNG."
+  );
+}
+
 export function pngRejectMessage(file) {
   const shown = file && file.name ? `"${file.name}"` : "File tersebut";
-  return `${shown} ditolak. CryptoPic hanya menerima gambar PNG (lossless). Format lain seperti JPEG mengompresi gambar dan merusak piksel sehingga pesan tersembunyi hilang.`;
+  return `${shown} ditolak. Mode Buka hanya menerima PNG hasil CryptoPic (selalu PNG 8-bit). Format lain tidak mungkin berisi pesan CryptoPic.`;
 }
 
 export function readFileBytes(file) {
@@ -55,6 +98,19 @@ const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
  * Tidak memeriksa kedalaman warna supaya pemanggil bisa memutuskan konversi.
  */
 export function readPngIhdr(arrayBuffer) {
+  return scanPng(arrayBuffer, { rejectIcc: true }).ihdr;
+}
+
+/**
+ * Info PNG yang toleran terhadap profil ICC, dipakai hanya untuk memberi label
+ * konversi di pratinjau. Tidak melempar error COLOR_PROFILE.
+ */
+export function readPngInfo(arrayBuffer) {
+  const { ihdr, hasIccp } = scanPng(arrayBuffer, { rejectIcc: false });
+  return { ...ihdr, hasIccp };
+}
+
+function scanPng(arrayBuffer, { rejectIcc }) {
   const bytes = new Uint8Array(arrayBuffer);
   if (bytes.length < 8 || !PNG_SIGNATURE.every((b, i) => bytes[i] === b)) {
     throw new StegoError("BAD_PNG", "File bukan PNG valid (tanda tangan rusak).");
@@ -62,6 +118,7 @@ export function readPngIhdr(arrayBuffer) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let offset = 8;
   let ihdr = null;
+  let hasIccp = false;
   while (offset + 8 <= bytes.length) {
     const length = view.getUint32(offset, false);
     const type = String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7]);
@@ -83,11 +140,14 @@ export function readPngIhdr(arrayBuffer) {
         interlace: bytes[offset + 20],
       };
     } else if (type === "iCCP") {
-      throw new StegoError(
-        "COLOR_PROFILE",
-        "PNG memiliki profil warna ICC. Browser akan mengonversi warnanya dan merusak pesan tersembunyi. " +
-          "Simpan ulang PNG tanpa profil warna (konversi ke sRGB) lalu coba lagi."
-      );
+      hasIccp = true;
+      if (rejectIcc) {
+        throw new StegoError(
+          "COLOR_PROFILE",
+          "PNG memiliki profil warna ICC. Browser akan mengonversi warnanya dan merusak pesan tersembunyi. " +
+            "Simpan ulang PNG tanpa profil warna (konversi ke sRGB) lalu coba lagi."
+        );
+      }
     }
     if (type === "IEND") break;
     offset += 12 + length;
@@ -95,7 +155,7 @@ export function readPngIhdr(arrayBuffer) {
   if (!ihdr) {
     throw new StegoError("BAD_PNG", "PNG tidak memiliki header IHDR.");
   }
-  return ihdr;
+  return { ihdr, hasIccp };
 }
 
 /**
@@ -127,29 +187,54 @@ export function validatePNGStructure(arrayBuffer) {
 }
 
 /**
- * True bila PNG valid tetapi memakai kedalaman 16-bit. Dipakai untuk memutuskan
- * apakah gambar perlu dikonversi (mode sembunyikan) atau ditolak (mode buka).
- * Sengaja membaca IHDR tanpa memanggil validatePNGStructure: fungsi itu memang
- * melempar untuk 16-bit, sedangkan pemanggil justru perlu tahu kedalamannya.
+ * True bila PNG valid tetapi memakai kedalaman 16-bit. Dipakai mode Buka untuk
+ * memberi pesan khusus: payload CryptoPic hanya pernah ditulis pada PNG 8-bit.
  */
 export function is16BitPng(arrayBuffer) {
   return readPngIhdr(arrayBuffer).bitDepth === 16;
 }
 
+/** Menolak gambar yang terlalu besar sebelum kanvas/ImageData dialokasikan. */
+export function assertImportDimensions(width, height) {
+  if (!width || !height) {
+    throw new StegoError("DECODE_FAILED", "Gambar tidak memiliki ukuran piksel yang valid.");
+  }
+  if (width > MAX_IMPORT_SIDE || height > MAX_IMPORT_SIDE || width * height > MAX_IMPORT_PIXELS) {
+    throw new StegoError(
+      "IMAGE_TOO_LARGE",
+      `Gambar ${width}×${height}px terlalu besar. Maksimal ${MAX_IMPORT_SIDE}px per sisi dan ` +
+        `${Math.round(MAX_IMPORT_PIXELS / 1_000_000)} megapiksel. Perkecil gambar lalu coba lagi.`
+    );
+  }
+}
+
 /**
- * Konversi gambar apa pun (termasuk PNG 16-bit) menjadi PNG 8-bit melalui
- * kanvas. Kanvas memotong presisi 16→8 bit, hasilnya PNG 8-bit valid yang aman
- * untuk steganografi LSB. Dipakai hanya saat menyembunyikan pesan: berkas yang
- * dihasilkan memang berkas baru, jadi konversi tidak menyesatkan.
- *
- * `hasTransparency` dihitung dari gambar asli, karena konversi meratakan alpha
- * ke putih; pemanggil perlu tahu agar notice transparansi tetap muncul.
+ * Menormalkan gambar apa pun (PNG semua kedalaman/profil, JPEG, WebP, GIF,
+ * BMP, AVIF) menjadi PNG 8-bit. Konversi dilakukan lewat kanvas SEBELUM payload
+ * disisipkan, jadi keamanan dan verifikasi LSB tidak berubah.
  */
-export async function convertTo8BitPngBlob(file) {
+export async function prepareImageForEmbedding(file) {
   const img = await loadImageFromFile(file);
-  const { imageData, hasTransparency } = imageToImageData(img);
+  assertImportDimensions(img.naturalWidth, img.naturalHeight);
+  let imageData;
+  let hasTransparency;
+  try {
+    ({ imageData, hasTransparency } = imageToImageData(img));
+  } catch {
+    throw new StegoError(
+      "CONVERT_FAILED",
+      "Gambar gagal dikonversi. Coba format lain atau perkecil ukurannya."
+    );
+  }
   const blob = await imageDataToPngBlob(imageData);
-  return { blob, hasTransparency };
+  return {
+    img,
+    imageData,
+    blob,
+    hasTransparency,
+    width: img.naturalWidth,
+    height: img.naturalHeight,
+  };
 }
 
 export function loadImageFromFile(file) {
@@ -162,7 +247,12 @@ export function loadImageFromFile(file) {
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);
-      reject(new StegoError("DECODE_FAILED", "File tidak dapat dibaca sebagai gambar. Pastikan PNG tidak rusak."));
+      reject(
+        new StegoError(
+          "DECODE_FAILED",
+          "File tidak dapat dibaca sebagai gambar. Format mungkin tidak didukung atau file rusak."
+        )
+      );
     };
     img.src = url;
   });

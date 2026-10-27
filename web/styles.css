@@ -233,6 +233,17 @@ button { font: inherit; color: inherit; cursor: pointer; }
   font-size: .92rem;
 }
 
+/* Tagline privasi: selalu center di semua lebar layar dan tetap center saat
+   jendela di-resize/digeser horizontal. */
+.privacy-tagline {
+  max-width: 780px;
+  margin-left: auto;
+  margin-right: auto;
+  text-align: center;
+  line-height: 1.45;
+  overflow-wrap: break-word;
+}
+
 .hide-title { text-align: center; }
 
 .hide-layout { display: flex; flex-direction: column; gap: 18px; }
@@ -331,18 +342,6 @@ button { font: inherit; color: inherit; cursor: pointer; }
   margin-bottom: 6px;
 }
 
-.optional-tag {
-  font-weight: 500;
-  font-size: .75rem;
-  color: var(--text-muted);
-  background: var(--bg-sunken);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 1px 8px;
-  margin-left: 4px;
-  vertical-align: middle;
-}
-
 .field input[type="text"],
 .field input[type="password"],
 .field textarea {
@@ -434,6 +433,12 @@ button { font: inherit; color: inherit; cursor: pointer; }
   margin-top: 4px;
   font-size: .78rem;
   color: var(--text-muted);
+}
+
+.stealth-label {
+  text-align: center;
+  line-height: 1.35;
+  overflow-wrap: break-word;
 }
 
 .pw-strength[data-level="weak"] .pw-strength-fill,
@@ -853,11 +858,21 @@ html.theme-animating::view-transition-new(root) {
 @media (max-width: 560px) {
   .header-inner { padding: 8px 12px; }
   .brand-name { font-size: 1.02rem; }
+  /* Baris pertama: logo di kiri, tombol tema di ujung kanan. Tab pindah ke
+     baris kedua selebar header, jadi tombol tema tidak menempel ke logo. */
+  .header-inner > #theme-toggle { margin-left: auto; }
   .tabs { order: 3; width: 100%; margin-left: 0; }
   .tab { flex: 1; justify-content: center; padding: 8px 6px; }
   .app-main { padding: 14px 12px 40px; }
   .card { padding: 16px; }
   .list-toolbar { align-items: flex-start; }
+}
+
+/* Layar sangat sempit (<340px): ikon tab + label panjang tidak bisa menyusut
+   lagi dan mendorong lebar halaman. Sembunyikan ikon dekoratif; teks tab tetap
+   utuh dan tab tetap bisa ditekan. */
+@media (max-width: 340px) {
+  .tab > svg { display: none; }
 }
 
 @media (min-width: 900px) {
@@ -922,7 +937,6 @@ html.theme-animating::view-transition-new(root) {
     text-align: center;
   }
   .open-security-column .callout { margin-top: 0; }
-  .open-security-column .open-start-note { margin-top: 0; }
   .open-security-column .field { margin-top: 14px; }
   .open-security-column .btn-block { margin-top: 18px; }
   .open-security-column .callout-danger { margin-top: 12px; }

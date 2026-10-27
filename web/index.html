@@ -61,15 +61,15 @@
     <section class="view active" id="view-hide" role="tabpanel" aria-labelledby="tab-hide">
       <div class="card hide-card">
         <h1 class="card-title hide-title">Sembunyikan Pesan-Mu</h1>
-        <p class="card-sub"><strong> No Server No Database Just Run On your Device,</strong> We Respect Your Privacy </p>
+        <p class="card-sub privacy-tagline"><strong>No Server, No Database, Just Run On your Device,</strong> We Respect Your Privacy</p>
 
         <div class="hide-layout">
           <div class="hide-column hide-image-column">
-            <div class="upload-zone" id="hide-drop" tabindex="0" role="button" aria-label="Pilih gambar PNG">
+            <div class="upload-zone" id="hide-drop" tabindex="0" role="button" aria-label="Pilih gambar">
               <svg viewBox="0 0 24 24" width="36" height="36" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="8.5" cy="10" r="1.6" fill="currentColor"/><path d="M4 16l4.5-4.5 3 3L15 11l5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
               <p class="upload-label">Seret gambar ke sini atau <span class="upload-link">pilih file</span></p>
-              <p class="upload-note"><strong> Wajib PNG </strong></p>
-              <input type="file" id="hide-file" accept="image/png,.png" hidden>
+              <p class="upload-note"><strong>PNG, JPEG, WebP, GIF, BMP, AVIF</strong> didukung. Otomatis dikonversi; hasil selalu PNG. Animasi memakai satu frame.</p>
+              <input type="file" id="hide-file" accept="image/png,image/x-png,image/jpeg,image/jpg,image/webp,image/gif,image/bmp,image/x-ms-bmp,image/avif,.png,.jpg,.jpeg,.webp,.gif,.bmp,.avif" hidden>
             </div>
 
             <div class="preview-wrap" id="hide-preview-wrap" hidden>
@@ -83,7 +83,6 @@
                 Gambar ini memiliki area transparan. Agar pesan tidak rusak, area transparan akan diratakan ke warna putih pada hasil.
               </div>
               <div class="callout callout-warn" id="bitdepth-notice" hidden>
-                Gambar ini 16-bit per channel dan dikonversi otomatis ke PNG 8-bit agar pesan dapat disisipkan. Gradasi warna yang sangat halus dapat sedikit disederhanakan, dan file yang diunduh adalah versi 8-bit.
               </div>
               <button class="btn btn-ghost btn-sm" id="hide-replace" type="button">Ganti gambar</button>
             </div>
@@ -121,12 +120,12 @@
             <label class="field">
               <span class="field-label">Kata Sandi</span>
               <span class="input-wrap">
-                <input type="password" id="hide-password" placeholder="Frasa sandi" autocomplete="new-password">
+                <input type="password" id="hide-password" placeholder="Contoh sandi: %uY(/&lt;mN#^#1L`N" autocomplete="new-password">
                 <button class="pw-toggle" type="button" data-target="hide-password" aria-label="Tampilkan sandi">
                   <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
                 </button>
               </span>
-              <span class="field-hint">Disarankan gunakan 4 kata acak atau lebih. Huruf besar/kecil tidak dibedakan.</span>
+              <span class="field-hint">Disarankan 8 kata acak atau lebih, Huruf Besar/Kecil Tidak Dibedakan.</span>
               <span class="pw-strength" id="pw-strength" hidden>
                 <span class="pw-strength-bar"><span class="pw-strength-fill" id="pw-strength-fill"></span></span>
                 <span class="pw-strength-label" id="pw-strength-label"></span>
@@ -138,9 +137,9 @@
             </div>
 
             <label class="field">
-              <span class="field-label">Petunjuk <span class="optional-tag">opsional</span></span>
+              <span class="field-label">Petunjuk</span>
               <input type="text" id="hide-hint" placeholder="Contoh: nama tempat kita bertemu 2 tahun lalu" maxlength="200">
-              <span class="field-hint">Terlihat sebelum sandi dimasukkan dan diverifikasi saat pesan berhasil dibuka. Jangan tulis sandi di sini.</span>
+              <span class="field-hint">Terlihat sebelum sandi dimasukkan. Jangan tulis sandi di sini.</span>
             </label>
 
             <button class="btn btn-primary btn-block" id="btn-encrypt" type="button" disabled>
@@ -157,14 +156,14 @@
     <section class="view" id="view-open" role="tabpanel" aria-labelledby="tab-open" hidden>
       <div class="card open-card">
         <h1 class="card-title open-title"> Buka Pesan-Mu </h1>
-        <p class="card-sub">Unggah gambar format PNG, lalu masukkan kata sandinya.</p>
+        <p class="card-sub">Unggah Gambar PNG, Masukkan Kata Sandi, Berdasarkan Hint/Petunjuk.</p>
 
         <div class="open-layout">
           <div class="open-column open-image-column">
             <div class="upload-zone" id="open-drop" tabindex="0" role="button" aria-label="Pilih gambar PNG berisi pesan">
               <svg viewBox="0 0 24 24" width="36" height="36" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="8.5" cy="10" r="1.6" fill="currentColor"/><path d="M4 16l4.5-4.5 3 3L15 11l5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
               <p class="upload-label">Seret gambar ke sini atau <span class="upload-link">pilih file</span></p>
-              <p class="upload-note">Hanya gambar <strong>PNG asli</strong> hasil CryptoPic. JPEG tidak mendukung.</p>
+              <p class="upload-note">Hanya gambar <strong>PNG asli</strong> hasil CryptoPic. Format Lain Tidak Didukung.</p>
               <input type="file" id="open-file" accept="image/png,.png" hidden>
             </div>
 
@@ -199,9 +198,6 @@
           </div>
 
           <div class="open-column open-security-column">
-            <div class="callout callout-info open-start-note" id="open-start-note">
-              Pilih gambar PNG yang berisi pesan untuk mulai membukanya.
-            </div>
             <div class="callout callout-info" id="open-hint-box" hidden>
               <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 11v5M12 7.5v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
               <div><strong>Petunjuk dari pengirim:</strong><br><span id="open-hint-text"></span></div>
@@ -296,7 +292,7 @@
   </main>
 
   <footer class="app-footer">
-    <p>CryptoPic -- Lindungi Privasi Anda,Tanpa Server,Tanpa Akun,Semua Ditangan Anda</p>
+    <p>CryptoPic — Lindungi Privasi Anda,Tanpa Server,Tanpa Akun,Semua Ditangan Anda</p>
   </footer>
 
   <div class="toast-container" id="toast-container" aria-live="polite"></div>

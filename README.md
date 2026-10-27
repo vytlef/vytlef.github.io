@@ -1,6 +1,7 @@
 # CryptoPic
 
-Sembunyikan pesan terenkripsi di dalam gambar PNG, tanpa server, tanpa akun.
+Sembunyikan pesan terenkripsi di dalam gambar (PNG, JPEG, WebP, GIF, BMP, AVIF;
+output selalu PNG), tanpa server, tanpa akun.
 Seluruh proses berjalan di browser: enkripsi AES-GCM, kunci dari Argon2id, lalu
 penyisipan payload ke bit piksel paling rendah (LSB) memakai matrix embedding.
 Server Go hanya menyajikan berkas statis.
@@ -17,14 +18,19 @@ go run .
 
 ## Alur
 
-- **Sembunyikan** — pilih PNG, tulis pesan, kata sandi, dan petunjuk opsional.
-  Hasilnya PNG baru yang bisa diunduh. Kata sandi minimal 8 karakter. Kata sandi
-  gambar **tidak peka huruf besar/kecil** ("Rahasia", "rahasia", dan "RAHASIA"
-  sama), tetapi spasi dan urutan karakter tetap dihitung. PNG 16-bit otomatis
-  dikonversi ke 8-bit (lihat [Kedalaman warna PNG](#kedalaman-warna-png)).
+- **Sembunyikan** — pilih gambar (PNG/JPEG/WebP/GIF/BMP/AVIF), tulis pesan, kata
+  sandi, dan petunjuk (wajib, terlihat publik). Semua format dan kedalaman bit
+  dikonversi otomatis ke PNG 8-bit sebelum pesan disisipkan, jadi hasil unduhan
+  selalu PNG. Kata sandi lemah tetap diizinkan agar Anda tidak terkunci, tetapi
+  sangat tidak disarankan karena penyerang dapat menebaknya secara offline;
+  indikator kekuatan hanya saran. Kata sandi gambar **tidak peka huruf
+  besar/kecil** ("Rahasia", "rahasia", dan "RAHASIA" sama), tetapi spasi dan
+  urutan karakter tetap dihitung. Lihat
+  [Format gambar](#format-gambar--konversi).
 - **Buka** — unggah PNG hasil CryptoPic, masukkan kata sandi. Pesan hanya
   muncul jika tag autentikasi AES-GCM cocok. Setiap pesan yang berhasil dibuka
-  otomatis dicatat sebagai memo lokal. PNG 16-bit ditolak dengan pesan jelas.
+  otomatis dicatat sebagai memo lokal. Hanya PNG 8-bit yang diterima; format
+  lain dan PNG 16-bit ditolak dengan pesan jelas.
 - **Memo** — memo disimpan di IndexedDB. PIN memo (minimal 8 karakter) membuat
   seluruh memo terenkripsi dengan Argon2id + AES-GCM. PIN memo tetap
   case-sensitive seperti sebelumnya. "Hapus semua" hanya menghapus memo, bukan
@@ -54,25 +60,34 @@ Jangan pakai ulang foto yang isinya sendiri sensitif atau mudah dikenali.
 CryptoPic juga tidak menghapus metadata EXIF karena gambar selalu diproses
 ulang menjadi kanvas, tetapi bukan berarti foto menjadi anonim.
 
-## Kedalaman warna PNG
+## Format gambar & konversi
 
-Kanvas browser hanya bekerja pada 8-bit per kanal, sehingga pesan CryptoPic
-selalu ditulis ke PNG 8-bit. Perlakuan untuk PNG 16-bit sengaja dibedakan:
+Kanvas browser bekerja pada 8-bit per kanal, sehingga pesan CryptoPic selalu
+ditulis ke PNG 8-bit. Semua format masuk dinormalisasi lewat kanvas **sebelum**
+payload disisipkan:
 
-- **Sembunyikan:** PNG 16-bit diterima dan **dikonversi otomatis** ke PNG 8-bit
-  sebelum pesan disisipkan. Pratinjau dan berkas yang diunduh adalah versi 8-bit,
-  dan sebuah notice menjelaskan konversi ini. Gradasi warna yang sangat halus
-  dapat sedikit disederhanakan; konversi tidak menyesatkan karena hasil unduhan
-  memang berkas baru. Jika PNG 16-bit juga memiliki area transparan, notice
-  transparansi tetap muncul karena area tersebut diratakan ke putih.
-- **Buka:** PNG 16-bit **ditolak** dengan pesan jelas, tanpa konversi diam-diam.
-  Pesan CryptoPic hanya pernah ditulis pada PNG 8-bit, jadi gambar 16-bit tidak
-  mungkin berisi payload. Konversi saat membuka justru akan mengubah piksel dan
-  merusak LSB, sehingga penolakan adalah perilaku yang benar.
+- **Didukung (mode Sembunyikan):** PNG (semua kedalaman bit, tipe warna, dan
+  profil ICC), JPEG, WebP, GIF, BMP, AVIF.
+- **Output:** selalu PNG 8-bit, apa pun format asalnya.
+- **Buka:** hanya PNG 8-bit. PNG 16-bit dan format lain ditolak dengan pesan
+  jelas, karena payload CryptoPic hanya pernah ditulis pada PNG 8-bit.
+- **Penanda konversi** di pratinjau menampilkan asal gambar, mis.
+  `JPEG → PNG 8-bit`, `WebP → PNG 8-bit`, `PNG 16-bit → 8-bit`,
+  `4-bit → 8-bit`, atau `ICC → sRGB 8-bit`. PNG 8-bit sRGB biasa hanya
+  menampilkan dimensi.
+- **Transparansi** diratakan ke putih dan notice transparansi muncul, sama
+  seperti sebelumnya.
+- **Animasi** (GIF/WebP/APNG) dipakai sebagai satu frame saja (biasanya frame
+  pertama), hasilnya PNG statis.
+- **Batas ukuran:** maksimal 16.384 px per sisi dan 64 megapiksel. Gambar lebih
+  besar ditolak agar decode/konversi tidak menghabiskan memori.
+- **Ditolak:** SVG (vektor + potensi konten aktif), TIFF, HEIC, PDF, dan file
+  yang tidak bisa didekode browser.
 
-PNG dengan kedalaman selain 8-bit/16-bit (mis. 4-bit palette) dan PNG berprofil
-warna ICC juga ditolak, baik saat menyembunyikan maupun membuka, karena kanvas
-akan mengubah piksel.
+Konversi berjalan sepenuhnya di browser: tidak ada upload, dan payload baru
+disisipkan setelah piksel dinormalisasi. Karena itu dukungan format tambahan
+tidak mengubah model keamanan. Metadata/EXIF ikut hilang saat re-encode, tetapi
+gambar tetap foto yang sama — bukan berarti anonim.
 
 ## Batas parameter KDF
 
@@ -126,8 +141,9 @@ go vet ./...
 npm i playwright-core
 node tools/browser-e2e-test.mjs
 
-# Matriks banyak variasi gambar (ukuran, tipe warna, 8/16-bit, tekstur) di
-# fitur Sembunyikan: sembunyikan -> unduh -> buka -> bandingkan pesan.
+# Matriks banyak variasi gambar (ukuran, tipe warna, 8/16-bit, PNG/JPEG/WebP/
+# GIF/BMP, tekstur) di fitur Sembunyikan: sembunyikan -> unduh -> buka ->
+# bandingkan pesan. Setiap input harus menghasilkan PNG 8-bit yang bisa dibuka.
 node tools/browser-image-matrix.mjs
 ```
 
