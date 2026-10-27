@@ -514,7 +514,7 @@ async function runUiTextFlow(browser, viewport, options, coverPath, label) {
 
     const uploadNote = (await page.textContent("#open-drop .upload-note")).replace(/\s+/g, " ").trim();
     assert(
-      uploadNote === "Hanya gambar PNG asli hasil CryptoPic. Format Lain Tidak Didukung.",
+      uploadNote === "Hanya gambar PNG hasil CryptoPic. Format Lain Tidak Didukung.",
       `Catatan unggah salah: ${uploadNote}`
     );
 

@@ -296,10 +296,19 @@ function updateStealthMeter(bytes, avail) {
   label.textContent = text;
 }
 
+
+
 function updateHideUi() {
   const secret = $("secret-text").value;
   const bytes = encoder.encode(secret).length;
   const avail = hideAvailable();
+
+  // Pesan tidak bisa diketik sebelum gambar dipilih (mode Sembunyikan).
+  if (!hideState.img) {
+    $("secret-text").disabled = true;
+  } else {
+    $("secret-text").disabled = false;
+  }
 
   if (hideState.img) {
     $("hide-capacity").textContent = `Kapasitas pesan maks. ${formatBytes(avail)}`;
