@@ -303,12 +303,12 @@ function updateHideUi() {
   const bytes = encoder.encode(secret).length;
   const avail = hideAvailable();
 
-  // Pesan tidak bisa diketik sebelum gambar dipilih (mode Sembunyikan).
-  if (!hideState.img) {
-    $("secret-text").disabled = true;
-  } else {
-    $("secret-text").disabled = false;
-  }
+  // Pesan, kata sandi, dan petunjuk hanya bisa diisi setelah gambar dipilih
+  // (mode Sembunyikan); sebelum itu field-nya dinonaktifkan.
+  const fieldsDisabled = !hideState.img;
+  $("secret-text").disabled = fieldsDisabled;
+  $("hide-password").disabled = fieldsDisabled;
+  $("hide-hint").disabled = fieldsDisabled;
 
   if (hideState.img) {
     $("hide-capacity").textContent = `Kapasitas pesan maks. ${formatBytes(avail)}`;
