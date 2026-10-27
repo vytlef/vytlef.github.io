@@ -474,6 +474,44 @@ button { font: inherit; color: inherit; cursor: pointer; }
 :root[data-theme="dark"] .btn-primary { color: #0e1424; }
 .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
 
+.btn-secondary {
+  background: var(--bg-sunken);
+  border-color: var(--border);
+  color: var(--text);
+}
+.btn-secondary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-sunken));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.btn-secondary:focus-visible,
+.btn-primary:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 2px;
+}
+.btn-save {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+  color: var(--accent-hover);
+}
+:root[data-theme="dark"] .btn-save { color: var(--accent); }
+.btn-save:hover:not(:disabled),
+.btn-save-confirm:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-sunken));
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--border));
+}
+.btn-save:disabled {
+  opacity: 1;
+  background: var(--bg-sunken);
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+.btn-save-confirm {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+  color: var(--accent-hover);
+}
+:root[data-theme="dark"] .btn-save-confirm { color: var(--accent); }
+
 .btn-danger { background: var(--danger); color: #fff; }
 .btn-danger:hover:not(:disabled) { filter: brightness(1.08); }
 
@@ -516,6 +554,20 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .callout-warn { background: var(--warn-soft); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 25%, transparent); }
 
 .callout-info { background: var(--accent-soft); color: var(--text); border-color: color-mix(in srgb, var(--accent) 25%, transparent); }
+
+.save-summary {
+  display: block;
+  margin-top: 12px;
+  overflow-wrap: anywhere;
+}
+.save-summary-details { min-width: 0; line-height: 1.7; }
+.save-summary-details strong { display: inline-block; margin-bottom: 4px; }
+.save-summary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
 
 .callout-danger { background: var(--danger-soft); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 30%, transparent); }
 

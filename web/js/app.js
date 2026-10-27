@@ -212,7 +212,7 @@ function setupPwToggles() {
 
 /* ---------------- Alur: Sembunyikan ---------------- */
 
-const hideState = { img: null, width: 0, height: 0, fileName: "", stegoUrl: null, hasTransparency: false };
+const hideState = { img: null, width: 0, height: 0, fileName: "", stegoUrl: null, hasTransparency: false, encrypting: false };
 let hidePreviewUrl = null;
 let openPreviewUrl = null;
 
@@ -220,6 +220,30 @@ function hideAvailable() {
   if (!hideState.img) return 0;
   const hint = $("hide-hint").value.trim();
   return maxMessageBytes(hideState.width, hideState.height, hint);
+}
+
+function renderSaveSummary() {
+  const secret = $("secret-text").value;
+  const password = $("hide-password").value;
+  const hint = $("hide-hint").value.trim();
+  const capacity = hideAvailable();
+  const bytes = encoder.encode(secret).length;
+  const maskedPassword = "•".repeat(Math.min(password.length, 32)) + (password.length > 32 ? "…" : "");
+
+  $("summary-message").textContent = `Pesan: ${secret}`;
+  $("summary-password").textContent = `Kata Sandi: ${maskedPassword}`;
+  $("summary-hint").textContent = `Petunjuk: ${hint}`;
+  $("summary-capacity").textContent = `Kapasitas Tersedia: ${formatBytes(capacity)} (${formatBytes(bytes)} digunakan)`;
+}
+
+function showSaveSummary() {
+  if ($("btn-save").disabled) return;
+  renderSaveSummary();
+  $("save-summary").style.display = "block";
+}
+
+function hideSaveSummary() {
+  $("save-summary").style.display = "none";
 }
 
 /* ---------------- Kekuatan sandi & meter stealth ---------------- */
@@ -332,11 +356,17 @@ function updateHideUi() {
   const hint = $("hide-hint").value.trim();
   const canEncrypt =
     !!hideState.img &&
+    !hideState.encrypting &&
     secret.trim().length > 0 &&
     password.length > 0 &&
     hint.length > 0 &&
     bytes <= avail;
   $("btn-encrypt").disabled = !canEncrypt;
+  $("btn-save").disabled = !canEncrypt;
+  if ($("save-summary").style.display !== "none") {
+    if (canEncrypt) renderSaveSummary();
+    else hideSaveSummary();
+  }
 }
 
 function conversionMarker(format, pngInfo) {
@@ -356,6 +386,13 @@ async function readPngInfoSafe(file) {
   } catch {
     return null;
   }
+}
+
+function clearHideFields() {
+  $("secret-text").value = "";
+  $("hide-password").value = "";
+  $("hide-hint").value = "";
+  hideSaveSummary();
 }
 
 async function handleHideFile(file) {
@@ -378,6 +415,7 @@ async function handleHideFile(file) {
     hideState.width = prepared.width;
     hideState.height = prepared.height;
     hideState.fileName = file.name;
+    clearHideFields();
     if (hidePreviewUrl) URL.revokeObjectURL(hidePreviewUrl);
     // Pratinjau memakai berkas PNG hasil normalisasi, sesuai hasil nyata.
     hidePreviewUrl = URL.createObjectURL(prepared.blob);
@@ -401,8 +439,11 @@ async function handleHideFile(file) {
 function resetHideImage() {
   hideState.img = null;
   hideState.imageData = null;
+  hideState.width = 0;
+  hideState.height = 0;
   hideState.fileName = "";
   hideState.hasTransparency = false;
+  clearHideFields();
   if (hideState.stegoUrl) {
     URL.revokeObjectURL(hideState.stegoUrl);
     hideState.stegoUrl = null;
@@ -418,10 +459,12 @@ function resetHideImage() {
   $("hide-result").hidden = true;
   $("btn-download").hidden = true;
   $("transparency-notice").hidden = true;
+  $("hide-file").value = "";
   updateHideUi();
 }
 
 async function doEncrypt() {
+  if (hideState.encrypting) return;
   if (!ensureCanvasStable()) return;
   const secret = $("secret-text").value;
   const password = $("hide-password").value;
@@ -429,11 +472,14 @@ async function doEncrypt() {
 
   if (!hideState.img || !secret.trim() || !password || !hint) return;
 
+  hideState.encrypting = true;
+  hideSaveSummary();
   const status = $("hide-status");
   status.hidden = false;
   status.classList.remove("error");
   status.innerHTML = '<span class="spinner"></span> Mengolah Argon2id dan menyisipkan pesan…';
   $("btn-encrypt").disabled = true;
+  $("btn-save").disabled = true;
 
   try {
     const imageData = hideState.imageData || imageToImageData(hideState.img).imageData;
@@ -471,6 +517,7 @@ async function doEncrypt() {
       console.error(err);
     }
   } finally {
+    hideState.encrypting = false;
     updateHideUi();
   }
 }
@@ -692,9 +739,6 @@ async function handleReuseImage() {
     if (remaining > 0) await waitMs(remaining);
 
     resetHideImage();
-    $("secret-text").value = "";
-    $("hide-password").value = "";
-    $("hide-hint").value = "";
     await handleHideFile(file);
     if (!hideState.img) {
       throw new Error("Gambar hasil pembersihan tidak dapat dimuat.");
@@ -1219,6 +1263,12 @@ function init() {
   $("hide-password").addEventListener("input", updateHideUi);
   $("hide-hint").addEventListener("input", updateHideUi);
   $("btn-encrypt").addEventListener("click", doEncrypt);
+  $("btn-save").addEventListener("click", showSaveSummary);
+  $("summary-cancel").addEventListener("click", hideSaveSummary);
+  $("summary-proceed").addEventListener("click", () => {
+    hideSaveSummary();
+    doEncrypt();
+  });
 
   setupUploadZone($("open-drop"), $("open-file"), handleOpenFile);
   $("open-replace").addEventListener("click", resetOpen);
@@ -1236,10 +1286,6 @@ function init() {
       document.body.classList.remove("cleansing");
     }
   });
-  $("btn-close-result").addEventListener("click", () => {
-    $("open-result").hidden = true;
-  });
-
   $("btn-select-mode").addEventListener("click", () => setSelectMode(true));
   $("btn-cancel-select").addEventListener("click", () => setSelectMode(false));
   $("select-all").addEventListener("change", (e) => {

@@ -481,7 +481,7 @@ async function runUiTextFlow(browser, viewport, options, coverPath, label) {
   try {
     const placeholder = await page.getAttribute("#hide-password", "placeholder");
     assert(
-      placeholder === "Contoh sandi: %uY(/<mN#^#1L`N",
+      placeholder === "Contoh Sandi: Pantai Bira",
       `Placeholder sandi salah: ${placeholder}`
     );
 
@@ -689,6 +689,16 @@ async function runReuseFlow(browser, viewport, coverPath, workDir) {
       (await page.inputValue("#hide-password")) === "",
       "Kata sandi hide harus kosong setelah Gunakan Lagi."
     );
+    assert((await page.inputValue("#secret-text")) === "", "Pesan harus kosong setelah Gunakan Lagi.");
+    assert((await page.inputValue("#hide-hint")) === "", "Petunjuk harus kosong setelah Gunakan Lagi.");
+    assert(
+      await page.locator("#hint-visibility-warning").isHidden(),
+      "Peringatan petunjuk publik harus tersembunyi setelah Gunakan Lagi."
+    );
+    assert(
+      (await page.getAttribute("#hide-password", "placeholder")) === "Contoh Sandi: Pantai Bira",
+      "Placeholder kata sandi tidak sesuai."
+    );
 
     // Pesan baru di gambar yang sudah dibersihkan.
     const second = `Pesan kedua ${Date.now()}`;
@@ -715,6 +725,23 @@ async function runReuseFlow(browser, viewport, coverPath, workDir) {
       timeout: 120000,
     });
     await page.waitForSelector("#view-hide.active", { timeout: 15000 });
+
+    // Mengganti gambar setelah mengisi field harus langsung membersihkan form.
+    await page.fill("#secret-text", "pesan yang harus dibersihkan");
+    await page.fill("#hide-password", PASSWORD);
+    await page.fill("#hide-hint", "petunjuk yang harus dibersihkan");
+    assert(!(await page.locator("#hint-visibility-warning").isHidden()), "Peringatan petunjuk semestinya terlihat sebelum ganti gambar.");
+    await page.click("#hide-replace");
+    assert((await page.inputValue("#secret-text")) === "", "Pesan belum dibersihkan saat ganti gambar.");
+    assert((await page.inputValue("#hide-password")) === "", "Kata sandi belum dibersihkan saat ganti gambar.");
+    assert((await page.inputValue("#hide-hint")) === "", "Petunjuk belum dibersihkan saat ganti gambar.");
+    assert(await page.locator("#hint-visibility-warning").isHidden(), "Peringatan harus tersembunyi saat gambar diganti.");
+    await page.locator("#hide-file").setInputFiles(coverPath);
+    await page.waitForSelector("#hide-preview-wrap:not([hidden])", { timeout: 15000 });
+    assert((await page.inputValue("#secret-text")) === "", "Pesan harus tetap kosong setelah gambar baru dimuat.");
+    assert((await page.inputValue("#hide-password")) === "", "Kata sandi harus tetap kosong setelah gambar baru dimuat.");
+    assert((await page.inputValue("#hide-hint")) === "", "Petunjuk harus tetap kosong setelah gambar baru dimuat.");
+    assert(await page.locator("#hint-visibility-warning").isHidden(), "Peringatan harus tetap tersembunyi setelah gambar baru dimuat.");
 
     assert(pageErrors.length === 0, `Ada error halaman: ${pageErrors.join(" | ")}`);
   } finally {
