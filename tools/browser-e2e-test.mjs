@@ -906,7 +906,10 @@ async function runMemoVault(browser, viewport, coverPath, workDir) {
     // Buka pesan -> memo tersimpan otomatis (terenkripsi).
     const opened = await openMessage(page, stegoPath, PASSWORD);
     assert(opened === message, "Dekripsi untuk memo gagal.");
+    await page.waitForFunction(() => !document.querySelector("#memo-badge").hidden);
+    assert((await page.textContent("#memo-badge")) === "1", "Badge memo baru seharusnya menampilkan satu pesan belum dibaca.");
     await page.click("#tab-memo");
+    assert(await page.locator("#memo-badge").isHidden(), "Badge harus hilang setelah tab Memo dibuka.");
     await page.waitForSelector(".memo-item", { timeout: 20000 });
     const preview = await page.textContent(".memo-preview");
     assert(preview.includes("Memo vault"), "Memo tidak tampil setelah disimpan.");
@@ -923,7 +926,17 @@ async function runMemoVault(browser, viewport, coverPath, workDir) {
     const listHidden = await page.evaluate(() => document.querySelector("#memo-list").hidden);
     assert(listHidden, "Daftar memo harus tersembunyi saat terkunci.");
 
+    // Dekripsi saat terkunci tetap menampilkan pesan; gagalnya autosimpan tidak mengosongkannya.
+    const openedWhileLocked = await openMessage(page, stegoPath, PASSWORD);
+    assert(openedWhileLocked === message, "Pesan hasil dekripsi kosong saat Memo terkunci.");
+    assert((await page.textContent("#open-message")) === message, "Pesan harus tetap tampil di kartu hasil saat Memo terkunci.");
+    await page.click("#tab-memo");
+    assert(await page.locator("#memo-badge").isHidden(), "Badge tidak boleh muncul karena memo terkunci dan pesan belum tersimpan.");
+    await page.click("#tab-open");
+    assert((await page.textContent("#open-message")) === message, "Pesan dekripsi harus tetap ada setelah berpindah tab Memo.");
+
     // PIN salah ditolak, PIN benar membuka.
+    await page.click("#tab-memo");
     await page.click("#btn-vault-primary");
     await page.fill("#vault-pin", "000000");
     await page.click("#btn-vault-submit");

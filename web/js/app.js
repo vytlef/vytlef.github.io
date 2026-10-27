@@ -163,7 +163,11 @@ function switchView(name) {
     tab.classList.toggle("active", active);
     tab.setAttribute("aria-selected", String(active));
   }
-  if (name === "memo") refreshMemoView();
+  if (name === "memo") {
+    unreadMemoCount = 0;
+    updateMemoBadge();
+    refreshMemoView();
+  }
 }
 
 /* ---------------- Upload zone ---------------- */
@@ -659,8 +663,12 @@ async function autoSaveMemo(message) {
   });
 
   if (result.ok) {
-    updateMemoBadge();
-    if ($("view-memo").classList.contains("active")) refreshMemoView();
+    if ($("view-memo").classList.contains("active")) {
+      refreshMemoView();
+    } else {
+      unreadMemoCount += 1;
+      updateMemoBadge();
+    }
     const pct = Math.round(result.usage.percent);
     if (pct >= 95) {
       showToast(`Tersimpan ke Memo — penyimpanan kritis (${pct}%). Segera hapus memo lama.`, "warn", 5500);
@@ -766,6 +774,7 @@ async function handleReuseImage() {
 /* ---------------- Memo ---------------- */
 
 let selectMode = false;
+let unreadMemoCount = 0;
 
 function updateMemoBadge() {
   const badge = $("memo-badge");
@@ -773,7 +782,7 @@ function updateMemoBadge() {
     badge.hidden = true;
     return;
   }
-  const count = listMemos().length;
+  const count = unreadMemoCount;
   badge.hidden = count === 0;
   badge.textContent = String(count);
 }
