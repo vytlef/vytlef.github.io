@@ -507,6 +507,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
   font-size: .88rem;
   margin-top: 16px;
   border: 1px solid transparent;
+  max-width: 100%;
+  overflow-wrap: break-word;
 }
 
 .callout svg { flex-shrink: 0; margin-top: 2px; }
@@ -866,6 +868,9 @@ html.theme-animating::view-transition-new(root) {
   .app-main { padding: 14px 12px 40px; }
   .card { padding: 16px; }
   .list-toolbar { align-items: flex-start; }
+  /* Panggilan peringatan (callout) menyesuaikan diri agar tidak overflow
+     saat lebar layar kecil / setelah geser/resizer. */
+  .callout { font-size: .82rem; padding: 10px 12px; }
 }
 
 /* Layar sangat sempit (<340px): ikon tab + label panjang tidak bisa menyusut
